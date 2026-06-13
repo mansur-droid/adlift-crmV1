@@ -1,6 +1,6 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Plus, Trash2, Edit, Save, X, Search, Download, Upload, Phone, Users, Briefcase, BarChart3, ClipboardList, Home, LogOut, Lock } from 'lucide-react';
+import { Plus, Trash2, Edit, Save, X, Search, Download, Upload, Phone, Users, Briefcase, BarChart3, ClipboardList, Home, LogOut, Lock, ShieldCheck } from 'lucide-react';
 import { supabase } from './supabaseClient';
 import './styles.css';
 
@@ -23,6 +23,31 @@ const tabs = [
   ['stats', BarChart3, 'Cold Call Stats']
 ];
 
+const rolePermissions = {
+  admin: {
+    label: 'Admin',
+    tabs: ['dashboard', 'leads', 'clients', 'freelancers', 'submissions', 'stats'],
+    canExport: true,
+    canImport: true,
+    canWrite: true,
+    canDelete: true
+  },
+  freelancer: {
+    label: 'Freelancer',
+    tabs: ['dashboard', 'submissions', 'stats'],
+    canExport: false,
+    canImport: false,
+    canWrite: true,
+    canDelete: false
+  }
+};
+
+function getUserRole(user) {
+  const rawRole = user?.app_metadata?.role || user?.user_metadata?.role || '';
+  const role = String(rawRole).trim().toLowerCase();
+  return rolePermissions[role] ? role : null;
+}
+
 function useLocalData() {
   const [data, setData] = useState(() => {
     try { return JSON.parse(localStorage.getItem('adlift-crm-data')) || defaultData; }
@@ -33,6 +58,19 @@ function useLocalData() {
 }
 
 function Empty({ text }) { return <div className="empty">{text}</div>; }
+
+function AccessDenied({ session, onLogout }) {
+  return <div className="loginPage">
+    <div className="loginCard">
+      <div className="loginLogo"><ShieldCheck size={24}/><strong>AdLift CRM</strong></div>
+      <h1>No role assigned</h1>
+      <p>This account is logged in, but it does not have an admin or freelancer role yet.</p>
+      <div className="authError">Ask the Supabase admin to set <b>role</b> to <b>admin</b> or <b>freelancer</b> in this user's metadata.</div>
+      <small>{session.user.email}</small>
+      <button className="primary full" onClick={onLogout}><LogOut size={16}/>Logout</button>
+    </div>
+  </div>
+}
 
 function Modal({ title, fields, initial = {}, onClose, onSave }) {
   const [form, setForm] = useState(initial);
@@ -75,7 +113,7 @@ const fieldSets = {
   ]
 };
 
-function TableSection({ type, title, data, setData }) {
+function TableSection({ type, title, data, setData, permissions }) {
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState(null);
   const rows = data[type] || [];
@@ -83,22 +121,28 @@ function TableSection({ type, title, data, setData }) {
   const save = item => { setData(prev => ({ ...prev, [type]: [...prev[type].filter(x => x.id !== item.id), item] })); setModal(null); };
   const del = id => setData(prev => ({ ...prev, [type]: prev[type].filter(x => x.id !== id) }));
   const keys = fieldSets[type].map(f => f.key).slice(0, 5);
+
   return <section className="card">
-    <div className="sectionTop"><div><h1>{title}</h1><p>{filtered.length} records</p></div><button className="primary" onClick={() => setModal({})}><Plus size={16}/> Add</button></div>
+    <div className="sectionTop">
+      <div><h1>{title}</h1><p>{filtered.length} records</p></div>
+      {permissions.canWrite && <button className="primary" onClick={() => setModal({})}><Plus size={16}/> Add</button>}
+    </div>
     <div className="search"><Search size={16}/><input placeholder={`Search ${title.toLowerCase()}...`} value={search} onChange={e => setSearch(e.target.value)} /></div>
-    {filtered.length === 0 ? <Empty text="No records yet. Add one."/> : <div className="tableWrap"><table><thead><tr>{keys.map(k => <th key={k}>{k}</th>)}<th>Actions</th></tr></thead><tbody>{filtered.map(r => <tr key={r.id}>{keys.map(k => <td key={k}>{String(r[k] || '-')}</td>)}<td className="actions"><button onClick={() => setModal(r)}><Edit size={15}/></button><button onClick={() => del(r.id)}><Trash2 size={15}/></button></td></tr>)}</tbody></table></div>}
-    {modal && <Modal title={`${modal.id ? 'Edit' : 'Add'} ${title}`} fields={fieldSets[type]} initial={modal} onClose={() => setModal(null)} onSave={save}/>} 
+    {filtered.length === 0 ? <Empty text="No records yet. Add one."/> : <div className="tableWrap"><table><thead><tr>{keys.map(k => <th key={k}>{k}</th>)}{permissions.canWrite && <th>Actions</th>}</tr></thead><tbody>{filtered.map(r => <tr key={r.id}>{keys.map(k => <td key={k}>{String(r[k] || '-')}</td>)}{permissions.canWrite && <td className="actions"><button onClick={() => setModal(r)}><Edit size={15}/></button>{permissions.canDelete && <button onClick={() => del(r.id)}><Trash2 size={15}/></button>}</td>}</tr>)}</tbody></table></div>}
+    {modal && permissions.canWrite && <Modal title={`${modal.id ? 'Edit' : 'Add'} ${title}`} fields={fieldSets[type]} initial={modal} onClose={() => setModal(null)} onSave={save}/>} 
   </section>
 }
 
-function Dashboard({ data }) {
+function Dashboard({ data, role }) {
   const totalDials = data.stats.reduce((s, x) => s + Number(x.dials || 0), 0);
   const totalPickups = data.stats.reduce((s, x) => s + Number(x.pickups || 0), 0);
   const interested = data.stats.reduce((s, x) => s + Number(x.interested || 0), 0);
-  const cards = [['Leads', data.leads.length], ['Clients', data.clients.length], ['Freelancers', data.freelancers.length], ['Dials', totalDials], ['Pickups', totalPickups], ['Interested', interested]];
-  return <section className="card"><h1>AdLift Dashboard</h1><p className="sub">Simple CRM for your appointment-setting agency.</p><div className="statsGrid">{cards.map(([a,b]) => <div className="stat" key={a}><span>{a}</span><strong>{b}</strong></div>)}</div><h2>Pipeline</h2><div className="pipeline">{['New','Contacted','Interested','Email Sent','Meeting Booked','Won'].map(stage => <div className="pipe" key={stage}><b>{stage}</b><span>{data.leads.filter(l => (l.status || '').toLowerCase() === stage.toLowerCase()).length}</span></div>)}</div></section>
-}
+  const adminCards = [['Leads', data.leads.length], ['Clients', data.clients.length], ['Freelancers', data.freelancers.length], ['Dials', totalDials], ['Pickups', totalPickups], ['Interested', interested]];
+  const freelancerCards = [['Submissions', data.submissions.length], ['Dials', totalDials], ['Pickups', totalPickups], ['Interested', interested]];
+  const cards = role === 'admin' ? adminCards : freelancerCards;
 
+  return <section className="card"><h1>AdLift Dashboard</h1><p className="sub">Simple CRM for your appointment-setting agency.</p><div className="statsGrid">{cards.map(([a,b]) => <div className="stat" key={a}><span>{a}</span><strong>{b}</strong></div>)}</div>{role === 'admin' && <><h2>Pipeline</h2><div className="pipeline">{['New','Contacted','Interested','Email Sent','Meeting Booked','Won'].map(stage => <div className="pipe" key={stage}><b>{stage}</b><span>{data.leads.filter(l => (l.status || '').toLowerCase() === stage.toLowerCase()).length}</span></div>)}</div></>}</section>
+}
 
 function LoginPage(){
   const [email,setEmail]=useState('');
@@ -144,9 +188,22 @@ function App(){
 
   if(authLoading) return <div className="loadingScreen">Loading AdLift CRM...</div>;
   if(!session) return <LoginPage/>;
+
+  const role = getUserRole(session.user);
+  if(!role) return <AccessDenied session={session} onLogout={logout}/>;
+
+  const permissions = rolePermissions[role];
+  const visibleTabs = tabs.filter(([id]) => permissions.tabs.includes(id));
+
+  if(!permissions.tabs.includes(tab)) {
+    setTimeout(() => setTab('dashboard'), 0);
+  }
+
+  const activeTab = permissions.tabs.includes(tab) ? tab : 'dashboard';
   const exportData=()=>{const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='adlift-crm-backup.json'; a.click();};
   const importData=e=>{const file=e.target.files[0]; if(!file) return; const reader=new FileReader(); reader.onload=()=>{try{setData(JSON.parse(reader.result));}catch{alert('Invalid JSON file')}}; reader.readAsText(file)};
-  return <div className="app"><aside><div className="brand">AdLift<span>CRM</span></div><div className="userBox">{session.user.email}</div>{tabs.map(([id,Icon,label])=><button className={tab===id?'active':''} onClick={()=>setTab(id)} key={id}><Icon size={18}/>{label}</button>)}<div className="sideTools"><button onClick={exportData}><Download size={16}/>Export</button><label><Upload size={16}/>Import<input hidden type="file" accept="application/json" onChange={importData}/></label><button onClick={logout}><LogOut size={16}/>Logout</button></div></aside><main>{tab==='dashboard'?<Dashboard data={data}/>:<TableSection type={tab} title={tabs.find(t=>t[0]===tab)[2]} data={data} setData={setData}/>}</main></div>
+
+  return <div className="app"><aside><div className="brand">AdLift<span>CRM</span></div><div className="userBox"><span>{session.user.email}</span><b className="roleBadge">{permissions.label}</b></div>{visibleTabs.map(([id,Icon,label])=><button className={activeTab===id?'active':''} onClick={()=>setTab(id)} key={id}><Icon size={18}/>{label}</button>)}<div className="sideTools">{permissions.canExport && <button onClick={exportData}><Download size={16}/>Export</button>}{permissions.canImport && <label><Upload size={16}/>Import<input hidden type="file" accept="application/json" onChange={importData}/></label>}<button onClick={logout}><LogOut size={16}/>Logout</button></div></aside><main>{activeTab==='dashboard'?<Dashboard data={data} role={role}/>:<TableSection type={activeTab} title={tabs.find(t=>t[0]===activeTab)[2]} data={data} setData={setData} permissions={permissions}/>}</main></div>
 }
 
 createRoot(document.getElementById('root')).render(<App/>);
