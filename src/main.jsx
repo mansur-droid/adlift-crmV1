@@ -1,6 +1,7 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Plus, Trash2, Edit, Save, X, Search, Download, Upload, Phone, Users, Briefcase, BarChart3, ClipboardList, Home } from 'lucide-react';
+import { Plus, Trash2, Edit, Save, X, Search, Download, Upload, Phone, Users, Briefcase, BarChart3, ClipboardList, Home, LogOut, Lock } from 'lucide-react';
+import { supabase } from './supabaseClient';
 import './styles.css';
 
 const defaultData = {
@@ -98,12 +99,54 @@ function Dashboard({ data }) {
   return <section className="card"><h1>AdLift Dashboard</h1><p className="sub">Simple CRM for your appointment-setting agency.</p><div className="statsGrid">{cards.map(([a,b]) => <div className="stat" key={a}><span>{a}</span><strong>{b}</strong></div>)}</div><h2>Pipeline</h2><div className="pipeline">{['New','Contacted','Interested','Email Sent','Meeting Booked','Won'].map(stage => <div className="pipe" key={stage}><b>{stage}</b><span>{data.leads.filter(l => (l.status || '').toLowerCase() === stage.toLowerCase()).length}</span></div>)}</div></section>
 }
 
+
+function LoginPage(){
+  const [email,setEmail]=useState('');
+  const [password,setPassword]=useState('');
+  const [loading,setLoading]=useState(false);
+  const [error,setError]=useState('');
+
+  const login=async(e)=>{
+    e.preventDefault();
+    setLoading(true); setError('');
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if(error) setError(error.message);
+    setLoading(false);
+  };
+
+  return <div className="loginPage">
+    <form className="loginCard" onSubmit={login}>
+      <div className="loginLogo"><Lock size={24}/><strong>AdLift CRM</strong></div>
+      <h1>Private access</h1>
+      <p>Login with the account created in Supabase.</p>
+      <label>Email<input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@adlift.com" required /></label>
+      <label>Password<input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••" required /></label>
+      {error && <div className="authError">{error}</div>}
+      <button className="primary full" disabled={loading}>{loading ? 'Logging in...' : 'Login'}</button>
+      <small>No public sign-up. Create users from Supabase → Authentication → Users.</small>
+    </form>
+  </div>
+}
+
 function App(){
+  const [session,setSession]=useState(null);
+  const [authLoading,setAuthLoading]=useState(true);
   const [data,setData]=useLocalData();
   const [tab,setTab]=useState('dashboard');
+
+  useEffect(()=>{
+    supabase.auth.getSession().then(({data})=>{ setSession(data.session); setAuthLoading(false); });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session)=>setSession(session));
+    return ()=>listener.subscription.unsubscribe();
+  },[]);
+
+  const logout=async()=>{ await supabase.auth.signOut(); };
+
+  if(authLoading) return <div className="loadingScreen">Loading AdLift CRM...</div>;
+  if(!session) return <LoginPage/>;
   const exportData=()=>{const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='adlift-crm-backup.json'; a.click();};
   const importData=e=>{const file=e.target.files[0]; if(!file) return; const reader=new FileReader(); reader.onload=()=>{try{setData(JSON.parse(reader.result));}catch{alert('Invalid JSON file')}}; reader.readAsText(file)};
-  return <div className="app"><aside><div className="brand">AdLift<span>CRM</span></div>{tabs.map(([id,Icon,label])=><button className={tab===id?'active':''} onClick={()=>setTab(id)} key={id}><Icon size={18}/>{label}</button>)}<div className="sideTools"><button onClick={exportData}><Download size={16}/>Export</button><label><Upload size={16}/>Import<input hidden type="file" accept="application/json" onChange={importData}/></label></div></aside><main>{tab==='dashboard'?<Dashboard data={data}/>:<TableSection type={tab} title={tabs.find(t=>t[0]===tab)[2]} data={data} setData={setData}/>}</main></div>
+  return <div className="app"><aside><div className="brand">AdLift<span>CRM</span></div><div className="userBox">{session.user.email}</div>{tabs.map(([id,Icon,label])=><button className={tab===id?'active':''} onClick={()=>setTab(id)} key={id}><Icon size={18}/>{label}</button>)}<div className="sideTools"><button onClick={exportData}><Download size={16}/>Export</button><label><Upload size={16}/>Import<input hidden type="file" accept="application/json" onChange={importData}/></label><button onClick={logout}><LogOut size={16}/>Logout</button></div></aside><main>{tab==='dashboard'?<Dashboard data={data}/>:<TableSection type={tab} title={tabs.find(t=>t[0]===tab)[2]} data={data} setData={setData}/>}</main></div>
 }
 
 createRoot(document.getElementById('root')).render(<App/>);
