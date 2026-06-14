@@ -48,6 +48,97 @@ function getUserRole(user) {
   return rolePermissions[role] ? role : null;
 }
 
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ''));
+}
+
+function normalizeHeader(value) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    const next = text[i + 1];
+
+    if (char === '"' && inQuotes && next === '"') {
+      cell += '"';
+      i++;
+    } else if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === ',' && !inQuotes) {
+      row.push(cell.trim());
+      cell = '';
+    } else if ((char === '\n' || char === '\r') && !inQuotes) {
+      if (char === '\r' && next === '\n') i++;
+      row.push(cell.trim());
+      if (row.some(Boolean)) rows.push(row);
+      row = [];
+      cell = '';
+    } else {
+      cell += char;
+    }
+  }
+
+  row.push(cell.trim());
+  if (row.some(Boolean)) rows.push(row);
+  if (rows.length < 2) return [];
+
+  const headers = rows[0].map(normalizeHeader);
+  return rows.slice(1).map(values => {
+    const item = {};
+    headers.forEach((header, index) => {
+      if (header) item[header] = values[index] || '';
+    });
+    return item;
+  });
+}
+
+function mapCsvRowsToType(type, rows) {
+  const aliases = {
+    name: ['name', 'fullname', 'fullnaam', 'voornaamachternaam', 'leadname', 'contactname'],
+    fullName: ['fullname', 'name', 'naam', 'contactname'],
+    company: ['company', 'bedrijf', 'agency', 'brokerage', 'kantoor'],
+    email: ['email', 'emailaddress', 'mail', 'e-mailadres'],
+    phone: ['phone', 'phonenumber', 'tel', 'telephone', 'gsm', 'nummer'],
+    niche: ['niche', 'market', 'markt'],
+    status: ['status', 'stage'],
+    value: ['value', 'criteria', 'budget', 'price', 'waarde'],
+    notes: ['notes', 'note', 'opmerkingen', 'notities', 'description'],
+    plan: ['plan'],
+    monthly: ['monthly', 'retainer', 'monthlyretainer'],
+    role: ['role', 'functie'],
+    pay: ['pay', 'payment', 'paystructure', 'payout'],
+    buyerStatus: ['buyerstatus', 'buyerclients', 'buyers', 'areyoucurrentlyworkingwithbuyerclients'],
+    leadSource: ['leadsource', 'source', 'howareyoucurrentlygeneratingbuyerleads'],
+    openToAppointments: ['opentoappointments', 'appointment', 'areyouopentoreceivingprequalifiedbuyerappointments'],
+    preferredType: ['preferredtype', 'preferredclienttype', 'clienttype'],
+    date: ['date', 'datum'],
+    dials: ['dials', 'calls', 'dialed'],
+    pickups: ['pickups', 'pickup', 'answers'],
+    conversations: ['conversations', 'conversation'],
+    pitches: ['pitches', 'pitch'],
+    interested: ['interested', 'interest']
+  };
+
+  const fields = fieldSets[type] || fieldSets.leads;
+
+  return rows.map(row => {
+    const item = {};
+    fields.forEach(field => {
+      const possibleHeaders = aliases[field.key] || [field.key];
+      const header = possibleHeaders.find(key => row[normalizeHeader(key)] !== undefined);
+      item[field.key] = header ? row[normalizeHeader(header)] : '';
+    });
+    return item;
+  });
+}
+
 function groupRecords(rows) {
   const grouped = { ...emptyData };
   rows.forEach(row => {
@@ -91,7 +182,7 @@ function useSupabaseData(role) {
   const saveRecord = async (type, item) => {
     if (!rolePermissions[role]?.recordTypes.includes(type)) return;
 
-    const id = item.id || crypto.randomUUID();
+    const id = isUuid(item.id) ? item.id : crypto.randomUUID();
     const payload = { ...item, id, created: item.created || new Date().toISOString().slice(0, 10) };
 
     const { error } = await supabase
@@ -129,7 +220,7 @@ function useSupabaseData(role) {
     const rows = Object.entries(importedData || {}).flatMap(([type, items]) => {
       if (!rolePermissions[role].recordTypes.includes(type) || !Array.isArray(items)) return [];
       return items.map(item => {
-        const id = item.id || crypto.randomUUID();
+        const id = isUuid(item.id) ? item.id : crypto.randomUUID();
         return {
           id,
           type,
@@ -296,9 +387,9 @@ function App(){
   const visibleTabs = tabs.filter(([id]) => permissions.tabs.includes(id));
   const activeTab = permissions.tabs.includes(tab) ? tab : 'dashboard';
   const exportData=()=>{const blob=new Blob([JSON.stringify(store.data,null,2)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='adlift-crm-backup.json'; a.click();};
-  const importData=e=>{const file=e.target.files[0]; if(!file) return; const reader=new FileReader(); reader.onload=async()=>{try{await store.importRecords(JSON.parse(reader.result));}catch{alert('Invalid JSON file')}}; reader.readAsText(file)};
+  const importData=e=>{const file=e.target.files[0]; if(!file) return; const reader=new FileReader(); reader.onload=async()=>{try{const text=String(reader.result || ''); if(file.name.toLowerCase().endsWith('.csv')){const targetType = activeTab === 'dashboard' ? 'leads' : activeTab; const rows = parseCsv(text); await store.importRecords({ [targetType]: mapCsvRowsToType(targetType, rows) });}else{await store.importRecords(JSON.parse(text));}}catch{alert('Invalid import file. Use a valid CSV or AdLift JSON backup.')}}; reader.readAsText(file); e.target.value='';};
 
-  return <div className="app"><aside><div className="brand">AdLift<span>CRM</span></div><div className="userBox"><span>{session.user.email}</span><b className="roleBadge">{permissions.label}</b></div>{visibleTabs.map(([id,Icon,label])=><button className={activeTab===id?'active':''} onClick={()=>setTab(id)} key={id}><Icon size={18}/>{label}</button>)}<div className="sideTools">{permissions.canExport && <button onClick={exportData}><Download size={16}/>Export</button>}{permissions.canImport && <label><Upload size={16}/>Import<input hidden type="file" accept="application/json" onChange={importData}/></label>}<button onClick={store.loadData}><RefreshCw size={16}/>Refresh</button><button onClick={logout}><LogOut size={16}/>Logout</button></div></aside><main>{store.error && <div className="dataError">{store.error}</div>}{store.loading ? <div className="loadingScreen inline">Loading CRM data...</div> : activeTab==='dashboard'?<Dashboard data={store.data} role={role}/>:<TableSection type={activeTab} title={tabs.find(t=>t[0]===activeTab)[2]} data={store.data} permissions={permissions} onSave={store.saveRecord} onDelete={store.deleteRecord}/>}</main></div>
+  return <div className="app"><aside><div className="brand">AdLift<span>CRM</span></div><div className="userBox"><span>{session.user.email}</span><b className="roleBadge">{permissions.label}</b></div>{visibleTabs.map(([id,Icon,label])=><button className={activeTab===id?'active':''} onClick={()=>setTab(id)} key={id}><Icon size={18}/>{label}</button>)}<div className="sideTools">{permissions.canExport && <button onClick={exportData}><Download size={16}/>Export</button>}{permissions.canImport && <label><Upload size={16}/>Import<input hidden type="file" accept=".json,.csv,application/json,text/csv" onChange={importData}/></label>}<button onClick={store.loadData}><RefreshCw size={16}/>Refresh</button><button onClick={logout}><LogOut size={16}/>Logout</button></div></aside><main>{store.error && <div className="dataError">{store.error}</div>}{store.loading ? <div className="loadingScreen inline">Loading CRM data...</div> : activeTab==='dashboard'?<Dashboard data={store.data} role={role}/>:<TableSection type={activeTab} title={tabs.find(t=>t[0]===activeTab)[2]} data={store.data} permissions={permissions} onSave={store.saveRecord} onDelete={store.deleteRecord}/>}</main></div>
 }
 
 createRoot(document.getElementById('root')).render(<App/>);
