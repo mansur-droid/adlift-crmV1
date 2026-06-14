@@ -1,13 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Plus, Trash2, Edit, Save, X, Search, Download, Upload, Phone, Users, Briefcase, BarChart3, ClipboardList, Home, LogOut, Lock, ShieldCheck } from 'lucide-react';
+import { Plus, Trash2, Edit, Save, X, Search, Download, Upload, Phone, Users, Briefcase, BarChart3, ClipboardList, Home, LogOut, Lock, ShieldCheck, RefreshCw } from 'lucide-react';
 import { supabase } from './supabaseClient';
 import './styles.css';
 
-const defaultData = {
-  leads: [
-    { id: crypto.randomUUID(), name: 'Peter Arner', company: 'Compass', email: 'peter@example.com', phone: '', niche: 'Luxury real estate', status: 'Interested', value: '1.5M+ buyers', notes: 'Asked for email. Wants only leads over 1.5M.', created: new Date().toISOString().slice(0,10) }
-  ],
+const emptyData = {
+  leads: [],
   clients: [],
   freelancers: [],
   submissions: [],
@@ -27,6 +25,7 @@ const rolePermissions = {
   admin: {
     label: 'Admin',
     tabs: ['dashboard', 'leads', 'clients', 'freelancers', 'submissions', 'stats'],
+    recordTypes: ['leads', 'clients', 'freelancers', 'submissions', 'stats'],
     canExport: true,
     canImport: true,
     canWrite: true,
@@ -35,6 +34,7 @@ const rolePermissions = {
   freelancer: {
     label: 'Freelancer',
     tabs: ['dashboard', 'submissions', 'stats'],
+    recordTypes: ['submissions', 'stats'],
     canExport: false,
     canImport: false,
     canWrite: true,
@@ -48,13 +48,110 @@ function getUserRole(user) {
   return rolePermissions[role] ? role : null;
 }
 
-function useLocalData() {
-  const [data, setData] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('adlift-crm-data')) || defaultData; }
-    catch { return defaultData; }
+function groupRecords(rows) {
+  const grouped = { ...emptyData };
+  rows.forEach(row => {
+    if (!grouped[row.type]) return;
+    grouped[row.type].push({ ...(row.payload || {}), id: row.id });
   });
-  useEffect(() => localStorage.setItem('adlift-crm-data', JSON.stringify(data)), [data]);
-  return [data, setData];
+  return grouped;
+}
+
+function useSupabaseData(role) {
+  const [data, setData] = useState(emptyData);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const loadData = async () => {
+    if (!role) return;
+    setLoading(true);
+    setError('');
+
+    const allowedTypes = rolePermissions[role].recordTypes;
+    const { data: rows, error } = await supabase
+      .from('crm_records')
+      .select('id,type,payload,created_at')
+      .in('type', allowedTypes)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      setError(error.message);
+      setData(emptyData);
+    } else {
+      setData(groupRecords(rows || []));
+    }
+
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    loadData();
+  }, [role]);
+
+  const saveRecord = async (type, item) => {
+    if (!rolePermissions[role]?.recordTypes.includes(type)) return;
+
+    const id = item.id || crypto.randomUUID();
+    const payload = { ...item, id, created: item.created || new Date().toISOString().slice(0, 10) };
+
+    const { error } = await supabase
+      .from('crm_records')
+      .upsert({ id, type, payload, updated_at: new Date().toISOString() });
+
+    if (error) {
+      setError(error.message);
+      return;
+    }
+
+    await loadData();
+  };
+
+  const deleteRecord = async (type, id) => {
+    if (!rolePermissions[role]?.canDelete) return;
+
+    const { error } = await supabase
+      .from('crm_records')
+      .delete()
+      .eq('type', type)
+      .eq('id', id);
+
+    if (error) {
+      setError(error.message);
+      return;
+    }
+
+    await loadData();
+  };
+
+  const importRecords = async importedData => {
+    if (!rolePermissions[role]?.canImport) return;
+
+    const rows = Object.entries(importedData || {}).flatMap(([type, items]) => {
+      if (!rolePermissions[role].recordTypes.includes(type) || !Array.isArray(items)) return [];
+      return items.map(item => {
+        const id = item.id || crypto.randomUUID();
+        return {
+          id,
+          type,
+          payload: { ...item, id, created: item.created || new Date().toISOString().slice(0, 10) },
+          updated_at: new Date().toISOString()
+        };
+      });
+    });
+
+    if (!rows.length) return;
+
+    const { error } = await supabase.from('crm_records').upsert(rows);
+
+    if (error) {
+      setError(error.message);
+      return;
+    }
+
+    await loadData();
+  };
+
+  return { data, loading, error, loadData, saveRecord, deleteRecord, importRecords };
 }
 
 function Empty({ text }) { return <div className="empty">{text}</div>; }
@@ -113,13 +210,12 @@ const fieldSets = {
   ]
 };
 
-function TableSection({ type, title, data, setData, permissions }) {
+function TableSection({ type, title, data, permissions, onSave, onDelete }) {
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState(null);
   const rows = data[type] || [];
   const filtered = rows.filter(r => JSON.stringify(r).toLowerCase().includes(search.toLowerCase()));
-  const save = item => { setData(prev => ({ ...prev, [type]: [...prev[type].filter(x => x.id !== item.id), item] })); setModal(null); };
-  const del = id => setData(prev => ({ ...prev, [type]: prev[type].filter(x => x.id !== id) }));
+  const save = async item => { await onSave(type, item); setModal(null); };
   const keys = fieldSets[type].map(f => f.key).slice(0, 5);
 
   return <section className="card">
@@ -128,7 +224,7 @@ function TableSection({ type, title, data, setData, permissions }) {
       {permissions.canWrite && <button className="primary" onClick={() => setModal({})}><Plus size={16}/> Add</button>}
     </div>
     <div className="search"><Search size={16}/><input placeholder={`Search ${title.toLowerCase()}...`} value={search} onChange={e => setSearch(e.target.value)} /></div>
-    {filtered.length === 0 ? <Empty text="No records yet. Add one."/> : <div className="tableWrap"><table><thead><tr>{keys.map(k => <th key={k}>{k}</th>)}{permissions.canWrite && <th>Actions</th>}</tr></thead><tbody>{filtered.map(r => <tr key={r.id}>{keys.map(k => <td key={k}>{String(r[k] || '-')}</td>)}{permissions.canWrite && <td className="actions"><button onClick={() => setModal(r)}><Edit size={15}/></button>{permissions.canDelete && <button onClick={() => del(r.id)}><Trash2 size={15}/></button>}</td>}</tr>)}</tbody></table></div>}
+    {filtered.length === 0 ? <Empty text="No records yet. Add one."/> : <div className="tableWrap"><table><thead><tr>{keys.map(k => <th key={k}>{k}</th>)}{permissions.canWrite && <th>Actions</th>}</tr></thead><tbody>{filtered.map(r => <tr key={r.id}>{keys.map(k => <td key={k}>{String(r[k] || '-')}</td>)}{permissions.canWrite && <td className="actions"><button onClick={() => setModal(r)}><Edit size={15}/></button>{permissions.canDelete && <button onClick={() => onDelete(type, r.id)}><Trash2 size={15}/></button>}</td>}</tr>)}</tbody></table></div>}
     {modal && permissions.canWrite && <Modal title={`${modal.id ? 'Edit' : 'Add'} ${title}`} fields={fieldSets[type]} initial={modal} onClose={() => setModal(null)} onSave={save}/>} 
   </section>
 }
@@ -141,7 +237,7 @@ function Dashboard({ data, role }) {
   const freelancerCards = [['Submissions', data.submissions.length], ['Dials', totalDials], ['Pickups', totalPickups], ['Interested', interested]];
   const cards = role === 'admin' ? adminCards : freelancerCards;
 
-  return <section className="card"><h1>AdLift Dashboard</h1><p className="sub">Simple CRM for your appointment-setting agency.</p><div className="statsGrid">{cards.map(([a,b]) => <div className="stat" key={a}><span>{a}</span><strong>{b}</strong></div>)}</div>{role === 'admin' && <><h2>Pipeline</h2><div className="pipeline">{['New','Contacted','Interested','Email Sent','Meeting Booked','Won'].map(stage => <div className="pipe" key={stage}><b>{stage}</b><span>{data.leads.filter(l => (l.status || '').toLowerCase() === stage.toLowerCase()).length}</span></div>)}</div></>}</section>
+  return <section className="card"><h1>AdLift Dashboard</h1><p className="sub">Shared CRM data from Supabase.</p><div className="statsGrid">{cards.map(([a,b]) => <div className="stat" key={a}><span>{a}</span><strong>{b}</strong></div>)}</div>{role === 'admin' && <><h2>Pipeline</h2><div className="pipeline">{['New','Contacted','Interested','Email Sent','Meeting Booked','Won'].map(stage => <div className="pipe" key={stage}><b>{stage}</b><span>{data.leads.filter(l => (l.status || '').toLowerCase() === stage.toLowerCase()).length}</span></div>)}</div></>}</section>
 }
 
 function LoginPage(){
@@ -175,7 +271,6 @@ function LoginPage(){
 function App(){
   const [session,setSession]=useState(null);
   const [authLoading,setAuthLoading]=useState(true);
-  const [data,setData]=useLocalData();
   const [tab,setTab]=useState('dashboard');
 
   useEffect(()=>{
@@ -184,26 +279,26 @@ function App(){
     return ()=>listener.subscription.unsubscribe();
   },[]);
 
+  const role = session ? getUserRole(session.user) : null;
+  const store = useSupabaseData(role);
+
+  useEffect(() => {
+    if (role && !rolePermissions[role].tabs.includes(tab)) setTab('dashboard');
+  }, [role, tab]);
+
   const logout=async()=>{ await supabase.auth.signOut(); };
 
   if(authLoading) return <div className="loadingScreen">Loading AdLift CRM...</div>;
   if(!session) return <LoginPage/>;
-
-  const role = getUserRole(session.user);
   if(!role) return <AccessDenied session={session} onLogout={logout}/>;
 
   const permissions = rolePermissions[role];
   const visibleTabs = tabs.filter(([id]) => permissions.tabs.includes(id));
-
-  if(!permissions.tabs.includes(tab)) {
-    setTimeout(() => setTab('dashboard'), 0);
-  }
-
   const activeTab = permissions.tabs.includes(tab) ? tab : 'dashboard';
-  const exportData=()=>{const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='adlift-crm-backup.json'; a.click();};
-  const importData=e=>{const file=e.target.files[0]; if(!file) return; const reader=new FileReader(); reader.onload=()=>{try{setData(JSON.parse(reader.result));}catch{alert('Invalid JSON file')}}; reader.readAsText(file)};
+  const exportData=()=>{const blob=new Blob([JSON.stringify(store.data,null,2)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='adlift-crm-backup.json'; a.click();};
+  const importData=e=>{const file=e.target.files[0]; if(!file) return; const reader=new FileReader(); reader.onload=async()=>{try{await store.importRecords(JSON.parse(reader.result));}catch{alert('Invalid JSON file')}}; reader.readAsText(file)};
 
-  return <div className="app"><aside><div className="brand">AdLift<span>CRM</span></div><div className="userBox"><span>{session.user.email}</span><b className="roleBadge">{permissions.label}</b></div>{visibleTabs.map(([id,Icon,label])=><button className={activeTab===id?'active':''} onClick={()=>setTab(id)} key={id}><Icon size={18}/>{label}</button>)}<div className="sideTools">{permissions.canExport && <button onClick={exportData}><Download size={16}/>Export</button>}{permissions.canImport && <label><Upload size={16}/>Import<input hidden type="file" accept="application/json" onChange={importData}/></label>}<button onClick={logout}><LogOut size={16}/>Logout</button></div></aside><main>{activeTab==='dashboard'?<Dashboard data={data} role={role}/>:<TableSection type={activeTab} title={tabs.find(t=>t[0]===activeTab)[2]} data={data} setData={setData} permissions={permissions}/>}</main></div>
+  return <div className="app"><aside><div className="brand">AdLift<span>CRM</span></div><div className="userBox"><span>{session.user.email}</span><b className="roleBadge">{permissions.label}</b></div>{visibleTabs.map(([id,Icon,label])=><button className={activeTab===id?'active':''} onClick={()=>setTab(id)} key={id}><Icon size={18}/>{label}</button>)}<div className="sideTools">{permissions.canExport && <button onClick={exportData}><Download size={16}/>Export</button>}{permissions.canImport && <label><Upload size={16}/>Import<input hidden type="file" accept="application/json" onChange={importData}/></label>}<button onClick={store.loadData}><RefreshCw size={16}/>Refresh</button><button onClick={logout}><LogOut size={16}/>Logout</button></div></aside><main>{store.error && <div className="dataError">{store.error}</div>}{store.loading ? <div className="loadingScreen inline">Loading CRM data...</div> : activeTab==='dashboard'?<Dashboard data={store.data} role={role}/>:<TableSection type={activeTab} title={tabs.find(t=>t[0]===activeTab)[2]} data={store.data} permissions={permissions} onSave={store.saveRecord} onDelete={store.deleteRecord}/>}</main></div>
 }
 
 createRoot(document.getElementById('root')).render(<App/>);
