@@ -74,7 +74,7 @@ function parseCsv(text) {
       i++;
     } else if (char === '"') {
       inQuotes = !inQuotes;
-    } else if (char === ',' && !inQuotes) {
+    } else if ((char === ',' || char === ';' || char === '\t') && !inQuotes) {
       row.push(cell.trim());
       cell = '';
     } else if ((char === '\n' || char === '\r') && !inQuotes) {
@@ -118,15 +118,15 @@ function mapCsvRowsToColdCallProspects(rows) {
   return rows.map(row => {
     const firstName = getCsvValue(row, ['first name', 'firstname', 'voornaam']);
     const lastName = getCsvValue(row, ['last name', 'lastname', 'achternaam']);
-    const name = getCsvValue(row, ['name', 'full name', 'fullname', 'naam', 'lead name', 'contact name', 'agent name', 'realtor name']) || [firstName, lastName].filter(Boolean).join(' ');
+    const name = getCsvValue(row, ['name', 'full name', 'fullname', 'naam', 'lead name', 'contact name', 'agent name', 'realtor name', 'title', 'persoon', 'contact']) || [firstName, lastName].filter(Boolean).join(' ');
 
     return {
       name,
-      phone: getCsvValue(row, ['phone', 'phone number', 'phonenumber', 'mobile', 'tel', 'telephone', 'gsm', 'nummer']),
-      email: getCsvValue(row, ['email', 'email address', 'emailaddress', 'mail', 'e-mail', 'e-mailadres']),
+      phone: getCsvValue(row, ['phone', 'phone number', 'phonenumber', 'mobile', 'tel', 'telephone', 'gsm', 'nummer', 'telefoon', 'mobiel']),
+      email: getCsvValue(row, ['email', 'email address', 'emailaddress', 'mail', 'e-mail', 'e-mailadres', 'email1']),
       importedAt,
       status: normalizeColdCallStatus(getCsvValue(row, ['status', 'stage', 'lead status', 'cold call status'])),
-      notes: getCsvValue(row, ['notes', 'note', 'opmerkingen', 'notities', 'description'])
+      notes: getCsvValue(row, ['notes', 'note', 'opmerkingen', 'notities', 'description', 'omschrijving'])
     };
   }).filter(prospect => prospect.name || prospect.phone || prospect.email);
 }
@@ -217,6 +217,12 @@ function useSupabaseData(role) {
       importedAt: type === 'stats' ? (item.importedAt || today()) : item.importedAt
     };
 
+    const visibleItem = { ...payload, id };
+    setData(prev => ({
+      ...prev,
+      [type]: [visibleItem, ...(prev[type] || []).filter(row => row.id !== id)]
+    }));
+
     const { error } = await supabase
       .from('crm_records')
       .upsert({ id, type, payload, updated_at: new Date().toISOString() });
@@ -225,13 +231,16 @@ function useSupabaseData(role) {
       setError(error.message);
       return;
     }
-
-    await loadData();
   };
 
   const softDeleteRows = async (type, items) => {
     if (!rolePermissions[role]?.canDelete || !rolePermissions[role]?.recordTypes.includes(type)) return;
     if (!items.length) return;
+
+    setData(prev => ({
+      ...prev,
+      [type]: (prev[type] || []).filter(row => !items.some(item => item.id === row.id))
+    }));
 
     const deletedAt = new Date().toISOString();
     const rows = items.map(item => ({
@@ -247,8 +256,6 @@ function useSupabaseData(role) {
       setError(error.message);
       return;
     }
-
-    await loadData();
   };
 
   const deleteRecord = async (type, id) => {
@@ -264,14 +271,18 @@ function useSupabaseData(role) {
   const importRecords = async importedData => {
     if (!rolePermissions[role]?.canImport) return;
 
+    const newVisibleData = {};
     const rows = Object.entries(importedData || {}).flatMap(([type, items]) => {
       if (!rolePermissions[role].recordTypes.includes(type) || !Array.isArray(items)) return [];
+      newVisibleData[type] = [];
       return items.map(item => {
         const id = isUuid(item.id) ? item.id : crypto.randomUUID();
+        const payload = { ...item, id, deleted: false, created: item.created || today(), importedAt: type === 'stats' ? (item.importedAt || today()) : item.importedAt };
+        newVisibleData[type].push(payload);
         return {
           id,
           type,
-          payload: { ...item, id, deleted: false, created: item.created || today(), importedAt: type === 'stats' ? (item.importedAt || today()) : item.importedAt },
+          payload,
           updated_at: new Date().toISOString()
         };
       });
@@ -279,14 +290,20 @@ function useSupabaseData(role) {
 
     if (!rows.length) return;
 
+    setData(prev => {
+      const next = { ...prev };
+      Object.entries(newVisibleData).forEach(([type, items]) => {
+        next[type] = [...items, ...(prev[type] || [])];
+      });
+      return next;
+    });
+
     const { error } = await supabase.from('crm_records').upsert(rows);
 
     if (error) {
       setError(error.message);
       return;
     }
-
-    await loadData();
   };
 
   return { data, loading, error, loadData, saveRecord, deleteRecord, deleteAllRecords, importRecords };
