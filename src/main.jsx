@@ -220,7 +220,9 @@ function useSupabaseData(role) {
     const visibleItem = { ...payload, id };
     setData(prev => ({
       ...prev,
-      [type]: [visibleItem, ...(prev[type] || []).filter(row => row.id !== id)]
+      [type]: (prev[type] || []).some(row => row.id === id)
+        ? (prev[type] || []).map(row => row.id === id ? visibleItem : row)
+        : [visibleItem, ...(prev[type] || [])]
     }));
 
     const { error } = await supabase
