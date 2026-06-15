@@ -167,6 +167,7 @@ function groupRecords(rows) {
   const grouped = { ...emptyData };
   rows.forEach(row => {
     if (!grouped[row.type]) return;
+    if (row.payload?.deleted) return;
     grouped[row.type].push({ ...(row.payload || {}), id: row.id });
   });
   return grouped;
@@ -207,7 +208,7 @@ function useSupabaseData(role) {
     if (!rolePermissions[role]?.recordTypes.includes(type)) return;
 
     const id = isUuid(item.id) ? item.id : crypto.randomUUID();
-    const payload = { ...item, id, created: item.created || today(), importedAt: item.importedAt || today() };
+    const payload = { ...item, id, deleted: false, created: item.created || today(), importedAt: item.importedAt || today() };
 
     const { error } = await supabase
       .from('crm_records')
@@ -221,14 +222,19 @@ function useSupabaseData(role) {
     await loadData();
   };
 
-  const deleteRecord = async (type, id) => {
-    if (!rolePermissions[role]?.canDelete) return;
+  const softDeleteRows = async (type, items) => {
+    if (!rolePermissions[role]?.canDelete || !rolePermissions[role]?.recordTypes.includes(type)) return;
+    if (!items.length) return;
 
-    const { error } = await supabase
-      .from('crm_records')
-      .delete()
-      .eq('type', type)
-      .eq('id', id);
+    const deletedAt = new Date().toISOString();
+    const rows = items.map(item => ({
+      id: item.id,
+      type,
+      payload: { ...item, deleted: true, deletedAt },
+      updated_at: deletedAt
+    }));
+
+    const { error } = await supabase.from('crm_records').upsert(rows);
 
     if (error) {
       setError(error.message);
@@ -238,20 +244,14 @@ function useSupabaseData(role) {
     await loadData();
   };
 
+  const deleteRecord = async (type, id) => {
+    const item = data[type]?.find(row => row.id === id);
+    if (!item) return;
+    await softDeleteRows(type, [item]);
+  };
+
   const deleteAllRecords = async type => {
-    if (!rolePermissions[role]?.canDelete || !rolePermissions[role]?.recordTypes.includes(type)) return;
-
-    const { error } = await supabase
-      .from('crm_records')
-      .delete()
-      .eq('type', type);
-
-    if (error) {
-      setError(error.message);
-      return;
-    }
-
-    await loadData();
+    await softDeleteRows(type, data[type] || []);
   };
 
   const importRecords = async importedData => {
@@ -264,7 +264,7 @@ function useSupabaseData(role) {
         return {
           id,
           type,
-          payload: { ...item, id, created: item.created || today(), importedAt: item.importedAt || item.imported_at || today() },
+          payload: { ...item, id, deleted: false, created: item.created || today(), importedAt: item.importedAt || item.imported_at || today() },
           updated_at: new Date().toISOString()
         };
       });
