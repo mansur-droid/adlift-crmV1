@@ -12,6 +12,9 @@ const emptyData = {
   stats: []
 };
 
+const leadStatuses = ['dialed', 'opener', 'conversation', 'pitched', 'interested', 'callback', 'booked'];
+const today = () => new Date().toISOString().slice(0, 10);
+
 const tabs = [
   ['dashboard', Home, 'Dashboard'],
   ['leads', Phone, 'Leads'],
@@ -99,7 +102,31 @@ function parseCsv(text) {
   });
 }
 
+function getCsvValue(row, aliases) {
+  const key = aliases.map(normalizeHeader).find(alias => row[alias] !== undefined && String(row[alias]).trim() !== '');
+  return key ? String(row[key]).trim() : '';
+}
+
 function mapCsvRowsToType(type, rows) {
+  if (type === 'leads') {
+    const importedAt = today();
+    return rows.map(row => {
+      const firstName = getCsvValue(row, ['first name', 'firstname', 'voornaam']);
+      const lastName = getCsvValue(row, ['last name', 'lastname', 'achternaam']);
+      const name = getCsvValue(row, ['name', 'full name', 'fullname', 'naam', 'lead name', 'contact name']) || [firstName, lastName].filter(Boolean).join(' ');
+      const status = getCsvValue(row, ['status', 'stage', 'lead status']).toLowerCase();
+
+      return {
+        name,
+        phone: getCsvValue(row, ['phone', 'phone number', 'phonenumber', 'mobile', 'tel', 'telephone', 'gsm', 'nummer']),
+        email: getCsvValue(row, ['email', 'email address', 'emailaddress', 'mail', 'e-mail', 'e-mailadres']),
+        importedAt,
+        status: leadStatuses.includes(status) ? status : '',
+        notes: getCsvValue(row, ['notes', 'note', 'opmerkingen', 'notities', 'description'])
+      };
+    }).filter(lead => lead.name || lead.phone || lead.email);
+  }
+
   const aliases = {
     name: ['name', 'fullname', 'fullnaam', 'voornaamachternaam', 'leadname', 'contactname'],
     fullName: ['fullname', 'name', 'naam', 'contactname'],
@@ -127,13 +154,10 @@ function mapCsvRowsToType(type, rows) {
   };
 
   const fields = fieldSets[type] || fieldSets.leads;
-
   return rows.map(row => {
     const item = {};
     fields.forEach(field => {
-      const possibleHeaders = aliases[field.key] || [field.key];
-      const header = possibleHeaders.find(key => row[normalizeHeader(key)] !== undefined);
-      item[field.key] = header ? row[normalizeHeader(header)] : '';
+      item[field.key] = getCsvValue(row, aliases[field.key] || [field.key]);
     });
     return item;
   });
@@ -183,7 +207,7 @@ function useSupabaseData(role) {
     if (!rolePermissions[role]?.recordTypes.includes(type)) return;
 
     const id = isUuid(item.id) ? item.id : crypto.randomUUID();
-    const payload = { ...item, id, created: item.created || new Date().toISOString().slice(0, 10) };
+    const payload = { ...item, id, created: item.created || today(), importedAt: item.importedAt || today() };
 
     const { error } = await supabase
       .from('crm_records')
@@ -214,6 +238,22 @@ function useSupabaseData(role) {
     await loadData();
   };
 
+  const deleteAllRecords = async type => {
+    if (!rolePermissions[role]?.canDelete || !rolePermissions[role]?.recordTypes.includes(type)) return;
+
+    const { error } = await supabase
+      .from('crm_records')
+      .delete()
+      .eq('type', type);
+
+    if (error) {
+      setError(error.message);
+      return;
+    }
+
+    await loadData();
+  };
+
   const importRecords = async importedData => {
     if (!rolePermissions[role]?.canImport) return;
 
@@ -224,7 +264,7 @@ function useSupabaseData(role) {
         return {
           id,
           type,
-          payload: { ...item, id, created: item.created || new Date().toISOString().slice(0, 10) },
+          payload: { ...item, id, created: item.created || today(), importedAt: item.importedAt || item.imported_at || today() },
           updated_at: new Date().toISOString()
         };
       });
@@ -242,7 +282,7 @@ function useSupabaseData(role) {
     await loadData();
   };
 
-  return { data, loading, error, loadData, saveRecord, deleteRecord, importRecords };
+  return { data, loading, error, loadData, saveRecord, deleteRecord, deleteAllRecords, importRecords };
 }
 
 function Empty({ text }) { return <div className="empty">{text}</div>; }
@@ -263,6 +303,7 @@ function AccessDenied({ session, onLogout }) {
 function Modal({ title, fields, initial = {}, onClose, onSave }) {
   const [form, setForm] = useState(initial);
   const update = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
+
   return <div className="overlay">
     <div className="modal">
       <div className="modalHead"><h2>{title}</h2><button onClick={onClose}><X size={18}/></button></div>
@@ -270,18 +311,24 @@ function Modal({ title, fields, initial = {}, onClose, onSave }) {
         {fields.map(f => <label key={f.key}>{f.label}
           {f.type === 'textarea'
             ? <textarea value={form[f.key] || ''} onChange={e => update(f.key, e.target.value)} />
-            : <input type={f.type || 'text'} value={form[f.key] || ''} onChange={e => update(f.key, e.target.value)} />}
+            : f.type === 'select'
+              ? <select value={form[f.key] || ''} onChange={e => update(f.key, e.target.value)}><option value="">Choose status</option>{(f.options || []).map(option => <option key={option} value={option}>{option}</option>)}</select>
+              : <input type={f.type || 'text'} value={form[f.key] || ''} onChange={e => update(f.key, e.target.value)} />}
         </label>)}
       </div>
-      <button className="primary full" onClick={() => onSave({ ...form, id: form.id || crypto.randomUUID(), created: form.created || new Date().toISOString().slice(0,10) })}><Save size={16}/> Save</button>
+      <button className="primary full" onClick={() => onSave({ ...form, id: form.id || crypto.randomUUID(), created: form.created || today() })}><Save size={16}/> Save</button>
     </div>
   </div>
 }
 
 const fieldSets = {
   leads: [
-    {key:'name', label:'Name'}, {key:'company', label:'Company'}, {key:'email', label:'Email'}, {key:'phone', label:'Phone'},
-    {key:'niche', label:'Niche'}, {key:'status', label:'Status'}, {key:'value', label:'Value / Criteria'}, {key:'notes', label:'Notes', type:'textarea'}
+    {key:'name', label:'Lead Name'},
+    {key:'phone', label:'Phone Number'},
+    {key:'email', label:'Email'},
+    {key:'importedAt', label:'Imported On', type:'date'},
+    {key:'status', label:'Status', type:'select', options: leadStatuses},
+    {key:'notes', label:'Notes', type:'textarea'}
   ],
   clients: [
     {key:'name', label:'Client Name'}, {key:'company', label:'Company'}, {key:'email', label:'Email'}, {key:'plan', label:'Plan'},
@@ -301,21 +348,44 @@ const fieldSets = {
   ]
 };
 
-function TableSection({ type, title, data, permissions, onSave, onDelete }) {
+function formatHeader(type, key) {
+  return fieldSets[type].find(field => field.key === key)?.label || key;
+}
+
+function renderCell(type, key, row, permissions, onSave) {
+  if (type === 'leads' && key === 'status' && permissions.canWrite) {
+    return <select className="tableSelect" value={row.status || ''} onChange={e => onSave(type, { ...row, status: e.target.value })}>
+      <option value="">Choose status</option>
+      {leadStatuses.map(status => <option key={status} value={status}>{status}</option>)}
+    </select>;
+  }
+
+  return String(row[key] || '-');
+}
+
+function TableSection({ type, title, data, permissions, onSave, onDelete, onDeleteAll }) {
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState(null);
   const rows = data[type] || [];
   const filtered = rows.filter(r => JSON.stringify(r).toLowerCase().includes(search.toLowerCase()));
   const save = async item => { await onSave(type, item); setModal(null); };
-  const keys = fieldSets[type].map(f => f.key).slice(0, 5);
+  const keys = type === 'leads' ? ['name', 'phone', 'email', 'importedAt', 'status', 'notes'] : fieldSets[type].map(f => f.key).slice(0, 5);
+
+  const handleDeleteAll = async () => {
+    const confirmed = window.confirm(`Are you sure you want to delete all ${title.toLowerCase()}? This cannot be undone.`);
+    if (confirmed) await onDeleteAll(type);
+  };
 
   return <section className="card">
     <div className="sectionTop">
       <div><h1>{title}</h1><p>{filtered.length} records</p></div>
-      {permissions.canWrite && <button className="primary" onClick={() => setModal({})}><Plus size={16}/> Add</button>}
+      <div className="sectionActions">
+        {permissions.canDelete && rows.length > 0 && <button className="danger" onClick={handleDeleteAll}><Trash2 size={16}/> Delete all</button>}
+        {permissions.canWrite && <button className="primary" onClick={() => setModal(type === 'leads' ? { importedAt: today() } : {})}><Plus size={16}/> Add</button>}
+      </div>
     </div>
     <div className="search"><Search size={16}/><input placeholder={`Search ${title.toLowerCase()}...`} value={search} onChange={e => setSearch(e.target.value)} /></div>
-    {filtered.length === 0 ? <Empty text="No records yet. Add one."/> : <div className="tableWrap"><table><thead><tr>{keys.map(k => <th key={k}>{k}</th>)}{permissions.canWrite && <th>Actions</th>}</tr></thead><tbody>{filtered.map(r => <tr key={r.id}>{keys.map(k => <td key={k}>{String(r[k] || '-')}</td>)}{permissions.canWrite && <td className="actions"><button onClick={() => setModal(r)}><Edit size={15}/></button>{permissions.canDelete && <button onClick={() => onDelete(type, r.id)}><Trash2 size={15}/></button>}</td>}</tr>)}</tbody></table></div>}
+    {filtered.length === 0 ? <Empty text="No records yet. Add one or import a CSV."/> : <div className="tableWrap"><table><thead><tr>{keys.map(k => <th key={k}>{formatHeader(type, k)}</th>)}{permissions.canWrite && <th>Actions</th>}</tr></thead><tbody>{filtered.map(r => <tr key={r.id}>{keys.map(k => <td key={k}>{renderCell(type, k, r, permissions, onSave)}</td>)}{permissions.canWrite && <td className="actions"><button onClick={() => setModal(r)}><Edit size={15}/></button>{permissions.canDelete && <button onClick={() => onDelete(type, r.id)}><Trash2 size={15}/></button>}</td>}</tr>)}</tbody></table></div>}
     {modal && permissions.canWrite && <Modal title={`${modal.id ? 'Edit' : 'Add'} ${title}`} fields={fieldSets[type]} initial={modal} onClose={() => setModal(null)} onSave={save}/>} 
   </section>
 }
@@ -328,7 +398,7 @@ function Dashboard({ data, role }) {
   const freelancerCards = [['Submissions', data.submissions.length], ['Dials', totalDials], ['Pickups', totalPickups], ['Interested', interested]];
   const cards = role === 'admin' ? adminCards : freelancerCards;
 
-  return <section className="card"><h1>AdLift Dashboard</h1><p className="sub">Shared CRM data from Supabase.</p><div className="statsGrid">{cards.map(([a,b]) => <div className="stat" key={a}><span>{a}</span><strong>{b}</strong></div>)}</div>{role === 'admin' && <><h2>Pipeline</h2><div className="pipeline">{['New','Contacted','Interested','Email Sent','Meeting Booked','Won'].map(stage => <div className="pipe" key={stage}><b>{stage}</b><span>{data.leads.filter(l => (l.status || '').toLowerCase() === stage.toLowerCase()).length}</span></div>)}</div></>}</section>
+  return <section className="card"><h1>AdLift Dashboard</h1><p className="sub">Shared CRM data from Supabase.</p><div className="statsGrid">{cards.map(([a,b]) => <div className="stat" key={a}><span>{a}</span><strong>{b}</strong></div>)}</div>{role === 'admin' && <><h2>Pipeline</h2><div className="pipeline">{leadStatuses.map(stage => <div className="pipe" key={stage}><b>{stage}</b><span>{data.leads.filter(l => (l.status || '').toLowerCase() === stage).length}</span></div>)}</div></>}</section>
 }
 
 function LoginPage(){
@@ -389,7 +459,7 @@ function App(){
   const exportData=()=>{const blob=new Blob([JSON.stringify(store.data,null,2)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='adlift-crm-backup.json'; a.click();};
   const importData=e=>{const file=e.target.files[0]; if(!file) return; const reader=new FileReader(); reader.onload=async()=>{try{const text=String(reader.result || ''); if(file.name.toLowerCase().endsWith('.csv')){const targetType = activeTab === 'dashboard' ? 'leads' : activeTab; const rows = parseCsv(text); await store.importRecords({ [targetType]: mapCsvRowsToType(targetType, rows) });}else{await store.importRecords(JSON.parse(text));}}catch{alert('Invalid import file. Use a valid CSV or AdLift JSON backup.')}}; reader.readAsText(file); e.target.value='';};
 
-  return <div className="app"><aside><div className="brand">AdLift<span>CRM</span></div><div className="userBox"><span>{session.user.email}</span><b className="roleBadge">{permissions.label}</b></div>{visibleTabs.map(([id,Icon,label])=><button className={activeTab===id?'active':''} onClick={()=>setTab(id)} key={id}><Icon size={18}/>{label}</button>)}<div className="sideTools">{permissions.canExport && <button onClick={exportData}><Download size={16}/>Export</button>}{permissions.canImport && <label><Upload size={16}/>Import<input hidden type="file" accept=".json,.csv,application/json,text/csv" onChange={importData}/></label>}<button onClick={store.loadData}><RefreshCw size={16}/>Refresh</button><button onClick={logout}><LogOut size={16}/>Logout</button></div></aside><main>{store.error && <div className="dataError">{store.error}</div>}{store.loading ? <div className="loadingScreen inline">Loading CRM data...</div> : activeTab==='dashboard'?<Dashboard data={store.data} role={role}/>:<TableSection type={activeTab} title={tabs.find(t=>t[0]===activeTab)[2]} data={store.data} permissions={permissions} onSave={store.saveRecord} onDelete={store.deleteRecord}/>}</main></div>
+  return <div className="app"><aside><div className="brand">AdLift<span>CRM</span></div><div className="userBox"><span>{session.user.email}</span><b className="roleBadge">{permissions.label}</b></div>{visibleTabs.map(([id,Icon,label])=><button className={activeTab===id?'active':''} onClick={()=>setTab(id)} key={id}><Icon size={18}/>{label}</button>)}<div className="sideTools">{permissions.canExport && <button onClick={exportData}><Download size={16}/>Export</button>}{permissions.canImport && <label><Upload size={16}/>Import<input hidden type="file" accept=".json,.csv,application/json,text/csv" onChange={importData}/></label>}<button onClick={store.loadData}><RefreshCw size={16}/>Refresh</button><button onClick={logout}><LogOut size={16}/>Logout</button></div></aside><main>{store.error && <div className="dataError">{store.error}</div>}{store.loading ? <div className="loadingScreen inline">Loading CRM data...</div> : activeTab==='dashboard'?<Dashboard data={store.data} role={role}/>:<TableSection type={activeTab} title={tabs.find(t=>t[0]===activeTab)[2]} data={store.data} permissions={permissions} onSave={store.saveRecord} onDelete={store.deleteRecord} onDeleteAll={store.deleteAllRecords}/>}</main></div>
 }
 
 createRoot(document.getElementById('root')).render(<App/>);
