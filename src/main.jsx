@@ -12,7 +12,7 @@ const emptyData = {
   stats: []
 };
 
-const leadStatuses = ['dialed', 'opener', 'conversation', 'pitched', 'interested', 'callback', 'booked'];
+const coldCallStatuses = ['dialed', 'opener', 'conversation', 'pitched', 'interested', 'callback', 'booked'];
 const today = () => new Date().toISOString().slice(0, 10);
 
 const tabs = [
@@ -107,25 +107,32 @@ function getCsvValue(row, aliases) {
   return key ? String(row[key]).trim() : '';
 }
 
-function mapCsvRowsToType(type, rows) {
-  if (type === 'leads') {
-    const importedAt = today();
-    return rows.map(row => {
-      const firstName = getCsvValue(row, ['first name', 'firstname', 'voornaam']);
-      const lastName = getCsvValue(row, ['last name', 'lastname', 'achternaam']);
-      const name = getCsvValue(row, ['name', 'full name', 'fullname', 'naam', 'lead name', 'contact name']) || [firstName, lastName].filter(Boolean).join(' ');
-      const status = getCsvValue(row, ['status', 'stage', 'lead status']).toLowerCase();
+function normalizeColdCallStatus(value) {
+  const status = String(value || '').trim().toLowerCase();
+  return coldCallStatuses.includes(status) ? status : '';
+}
 
-      return {
-        name,
-        phone: getCsvValue(row, ['phone', 'phone number', 'phonenumber', 'mobile', 'tel', 'telephone', 'gsm', 'nummer']),
-        email: getCsvValue(row, ['email', 'email address', 'emailaddress', 'mail', 'e-mail', 'e-mailadres']),
-        importedAt,
-        status: leadStatuses.includes(status) ? status : '',
-        notes: getCsvValue(row, ['notes', 'note', 'opmerkingen', 'notities', 'description'])
-      };
-    }).filter(lead => lead.name || lead.phone || lead.email);
-  }
+function mapCsvRowsToColdCallProspects(rows) {
+  const importedAt = today();
+
+  return rows.map(row => {
+    const firstName = getCsvValue(row, ['first name', 'firstname', 'voornaam']);
+    const lastName = getCsvValue(row, ['last name', 'lastname', 'achternaam']);
+    const name = getCsvValue(row, ['name', 'full name', 'fullname', 'naam', 'lead name', 'contact name', 'agent name', 'realtor name']) || [firstName, lastName].filter(Boolean).join(' ');
+
+    return {
+      name,
+      phone: getCsvValue(row, ['phone', 'phone number', 'phonenumber', 'mobile', 'tel', 'telephone', 'gsm', 'nummer']),
+      email: getCsvValue(row, ['email', 'email address', 'emailaddress', 'mail', 'e-mail', 'e-mailadres']),
+      importedAt,
+      status: normalizeColdCallStatus(getCsvValue(row, ['status', 'stage', 'lead status', 'cold call status'])),
+      notes: getCsvValue(row, ['notes', 'note', 'opmerkingen', 'notities', 'description'])
+    };
+  }).filter(prospect => prospect.name || prospect.phone || prospect.email);
+}
+
+function mapCsvRowsToType(type, rows) {
+  if (type === 'stats') return mapCsvRowsToColdCallProspects(rows);
 
   const aliases = {
     name: ['name', 'fullname', 'fullnaam', 'voornaamachternaam', 'leadname', 'contactname'],
@@ -144,13 +151,7 @@ function mapCsvRowsToType(type, rows) {
     buyerStatus: ['buyerstatus', 'buyerclients', 'buyers', 'areyoucurrentlyworkingwithbuyerclients'],
     leadSource: ['leadsource', 'source', 'howareyoucurrentlygeneratingbuyerleads'],
     openToAppointments: ['opentoappointments', 'appointment', 'areyouopentoreceivingprequalifiedbuyerappointments'],
-    preferredType: ['preferredtype', 'preferredclienttype', 'clienttype'],
-    date: ['date', 'datum'],
-    dials: ['dials', 'calls', 'dialed'],
-    pickups: ['pickups', 'pickup', 'answers'],
-    conversations: ['conversations', 'conversation'],
-    pitches: ['pitches', 'pitch'],
-    interested: ['interested', 'interest']
+    preferredType: ['preferredtype', 'preferredclienttype', 'clienttype']
   };
 
   const fields = fieldSets[type] || fieldSets.leads;
@@ -208,7 +209,13 @@ function useSupabaseData(role) {
     if (!rolePermissions[role]?.recordTypes.includes(type)) return;
 
     const id = isUuid(item.id) ? item.id : crypto.randomUUID();
-    const payload = { ...item, id, deleted: false, created: item.created || today(), importedAt: item.importedAt || today() };
+    const payload = {
+      ...item,
+      id,
+      deleted: false,
+      created: item.created || today(),
+      importedAt: type === 'stats' ? (item.importedAt || today()) : item.importedAt
+    };
 
     const { error } = await supabase
       .from('crm_records')
@@ -264,7 +271,7 @@ function useSupabaseData(role) {
         return {
           id,
           type,
-          payload: { ...item, id, deleted: false, created: item.created || today(), importedAt: item.importedAt || item.imported_at || today() },
+          payload: { ...item, id, deleted: false, created: item.created || today(), importedAt: type === 'stats' ? (item.importedAt || today()) : item.importedAt },
           updated_at: new Date().toISOString()
         };
       });
@@ -323,11 +330,13 @@ function Modal({ title, fields, initial = {}, onClose, onSave }) {
 
 const fieldSets = {
   leads: [
-    {key:'name', label:'Lead Name'},
-    {key:'phone', label:'Phone Number'},
+    {key:'name', label:'Client Lead Name'},
+    {key:'company', label:'Client / Company'},
     {key:'email', label:'Email'},
-    {key:'importedAt', label:'Imported On', type:'date'},
-    {key:'status', label:'Status', type:'select', options: leadStatuses},
+    {key:'phone', label:'Phone'},
+    {key:'niche', label:'Niche'},
+    {key:'status', label:'Qualification Status'},
+    {key:'value', label:'Value / Criteria'},
     {key:'notes', label:'Notes', type:'textarea'}
   ],
   clients: [
@@ -343,8 +352,12 @@ const fieldSets = {
     {key:'leadSource', label:'Current Lead Source'}, {key:'openToAppointments', label:'Open to Appointments?'}, {key:'preferredType', label:'Preferred Client Type'}, {key:'notes', label:'Notes', type:'textarea'}
   ],
   stats: [
-    {key:'date', label:'Date', type:'date'}, {key:'dials', label:'Dials', type:'number'}, {key:'pickups', label:'Pickups', type:'number'},
-    {key:'conversations', label:'Conversations', type:'number'}, {key:'pitches', label:'Pitches', type:'number'}, {key:'interested', label:'Interested', type:'number'}, {key:'notes', label:'Notes', type:'textarea'}
+    {key:'name', label:'Prospect Name'},
+    {key:'phone', label:'Phone Number'},
+    {key:'email', label:'Email'},
+    {key:'importedAt', label:'Imported On', type:'date'},
+    {key:'status', label:'Cold Call Status', type:'select', options: coldCallStatuses},
+    {key:'notes', label:'Notes', type:'textarea'}
   ]
 };
 
@@ -353,10 +366,10 @@ function formatHeader(type, key) {
 }
 
 function renderCell(type, key, row, permissions, onSave) {
-  if (type === 'leads' && key === 'status' && permissions.canWrite) {
+  if (type === 'stats' && key === 'status' && permissions.canWrite) {
     return <select className="tableSelect" value={row.status || ''} onChange={e => onSave(type, { ...row, status: e.target.value })}>
       <option value="">Choose status</option>
-      {leadStatuses.map(status => <option key={status} value={status}>{status}</option>)}
+      {coldCallStatuses.map(status => <option key={status} value={status}>{status}</option>)}
     </select>;
   }
 
@@ -369,7 +382,7 @@ function TableSection({ type, title, data, permissions, onSave, onDelete, onDele
   const rows = data[type] || [];
   const filtered = rows.filter(r => JSON.stringify(r).toLowerCase().includes(search.toLowerCase()));
   const save = async item => { await onSave(type, item); setModal(null); };
-  const keys = type === 'leads' ? ['name', 'phone', 'email', 'importedAt', 'status', 'notes'] : fieldSets[type].map(f => f.key).slice(0, 5);
+  const keys = type === 'stats' ? ['name', 'phone', 'email', 'importedAt', 'status', 'notes'] : fieldSets[type].map(f => f.key).slice(0, 5);
 
   const handleDeleteAll = async () => {
     const confirmed = window.confirm(`Are you sure you want to delete all ${title.toLowerCase()}? This cannot be undone.`);
@@ -381,7 +394,7 @@ function TableSection({ type, title, data, permissions, onSave, onDelete, onDele
       <div><h1>{title}</h1><p>{filtered.length} records</p></div>
       <div className="sectionActions">
         {permissions.canDelete && rows.length > 0 && <button className="danger" onClick={handleDeleteAll}><Trash2 size={16}/> Delete all</button>}
-        {permissions.canWrite && <button className="primary" onClick={() => setModal(type === 'leads' ? { importedAt: today() } : {})}><Plus size={16}/> Add</button>}
+        {permissions.canWrite && <button className="primary" onClick={() => setModal(type === 'stats' ? { importedAt: today() } : {})}><Plus size={16}/> Add</button>}
       </div>
     </div>
     <div className="search"><Search size={16}/><input placeholder={`Search ${title.toLowerCase()}...`} value={search} onChange={e => setSearch(e.target.value)} /></div>
@@ -391,14 +404,15 @@ function TableSection({ type, title, data, permissions, onSave, onDelete, onDele
 }
 
 function Dashboard({ data, role }) {
-  const totalDials = data.stats.reduce((s, x) => s + Number(x.dials || 0), 0);
-  const totalPickups = data.stats.reduce((s, x) => s + Number(x.pickups || 0), 0);
-  const interested = data.stats.reduce((s, x) => s + Number(x.interested || 0), 0);
-  const adminCards = [['Leads', data.leads.length], ['Clients', data.clients.length], ['Freelancers', data.freelancers.length], ['Dials', totalDials], ['Pickups', totalPickups], ['Interested', interested]];
-  const freelancerCards = [['Submissions', data.submissions.length], ['Dials', totalDials], ['Pickups', totalPickups], ['Interested', interested]];
+  const prospects = data.stats || [];
+  const interested = prospects.filter(x => x.status === 'interested').length;
+  const booked = prospects.filter(x => x.status === 'booked').length;
+  const callbacks = prospects.filter(x => x.status === 'callback').length;
+  const adminCards = [['Client Leads', data.leads.length], ['Clients', data.clients.length], ['Freelancers', data.freelancers.length], ['Cold Call Prospects', prospects.length], ['Interested', interested], ['Booked', booked]];
+  const freelancerCards = [['Submissions', data.submissions.length], ['Cold Call Prospects', prospects.length], ['Callbacks', callbacks], ['Booked', booked]];
   const cards = role === 'admin' ? adminCards : freelancerCards;
 
-  return <section className="card"><h1>AdLift Dashboard</h1><p className="sub">Shared CRM data from Supabase.</p><div className="statsGrid">{cards.map(([a,b]) => <div className="stat" key={a}><span>{a}</span><strong>{b}</strong></div>)}</div>{role === 'admin' && <><h2>Pipeline</h2><div className="pipeline">{leadStatuses.map(stage => <div className="pipe" key={stage}><b>{stage}</b><span>{data.leads.filter(l => (l.status || '').toLowerCase() === stage).length}</span></div>)}</div></>}</section>
+  return <section className="card"><h1>AdLift Dashboard</h1><p className="sub">Shared CRM data from Supabase.</p><div className="statsGrid">{cards.map(([a,b]) => <div className="stat" key={a}><span>{a}</span><strong>{b}</strong></div>)}</div>{role === 'admin' && <><h2>Cold Call Pipeline</h2><div className="pipeline">{coldCallStatuses.map(stage => <div className="pipe" key={stage}><b>{stage}</b><span>{prospects.filter(l => (l.status || '').toLowerCase() === stage).length}</span></div>)}</div></>}</section>
 }
 
 function LoginPage(){
@@ -457,7 +471,7 @@ function App(){
   const visibleTabs = tabs.filter(([id]) => permissions.tabs.includes(id));
   const activeTab = permissions.tabs.includes(tab) ? tab : 'dashboard';
   const exportData=()=>{const blob=new Blob([JSON.stringify(store.data,null,2)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='adlift-crm-backup.json'; a.click();};
-  const importData=e=>{const file=e.target.files[0]; if(!file) return; const reader=new FileReader(); reader.onload=async()=>{try{const text=String(reader.result || ''); if(file.name.toLowerCase().endsWith('.csv')){const targetType = activeTab === 'dashboard' ? 'leads' : activeTab; const rows = parseCsv(text); await store.importRecords({ [targetType]: mapCsvRowsToType(targetType, rows) });}else{await store.importRecords(JSON.parse(text));}}catch{alert('Invalid import file. Use a valid CSV or AdLift JSON backup.')}}; reader.readAsText(file); e.target.value='';};
+  const importData=e=>{const file=e.target.files[0]; if(!file) return; const reader=new FileReader(); reader.onload=async()=>{try{const text=String(reader.result || ''); if(file.name.toLowerCase().endsWith('.csv')){const rows = parseCsv(text); await store.importRecords({ stats: mapCsvRowsToType('stats', rows) }); setTab('stats');}else{await store.importRecords(JSON.parse(text));}}catch{alert('Invalid import file. Use a valid CSV or AdLift JSON backup.')}}; reader.readAsText(file); e.target.value='';};
 
   return <div className="app"><aside><div className="brand">AdLift<span>CRM</span></div><div className="userBox"><span>{session.user.email}</span><b className="roleBadge">{permissions.label}</b></div>{visibleTabs.map(([id,Icon,label])=><button className={activeTab===id?'active':''} onClick={()=>setTab(id)} key={id}><Icon size={18}/>{label}</button>)}<div className="sideTools">{permissions.canExport && <button onClick={exportData}><Download size={16}/>Export</button>}{permissions.canImport && <label><Upload size={16}/>Import<input hidden type="file" accept=".json,.csv,application/json,text/csv" onChange={importData}/></label>}<button onClick={store.loadData}><RefreshCw size={16}/>Refresh</button><button onClick={logout}><LogOut size={16}/>Logout</button></div></aside><main>{store.error && <div className="dataError">{store.error}</div>}{store.loading ? <div className="loadingScreen inline">Loading CRM data...</div> : activeTab==='dashboard'?<Dashboard data={store.data} role={role}/>:<TableSection type={activeTab} title={tabs.find(t=>t[0]===activeTab)[2]} data={store.data} permissions={permissions} onSave={store.saveRecord} onDelete={store.deleteRecord} onDeleteAll={store.deleteAllRecords}/>}</main></div>
 }
