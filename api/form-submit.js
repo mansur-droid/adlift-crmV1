@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const formSecret = process.env.GOOGLE_FORM_WEBHOOK_SECRET;
+const systemUserId = process.env.GOOGLE_FORM_CREATED_BY_USER_ID || '00000000-0000-0000-0000-000000000000';
 
 const reply = (res, status, body) => res.status(status).json(body);
 const clean = value => String(value || '').trim();
@@ -50,8 +51,8 @@ export default async function handler(req, res) {
     const { error } = await supabase.from('crm_records').upsert({
       id,
       type: 'submissions',
-      payload: { ...payload, id, fingerprint, created_by: 'google_form_webhook', created_by_email: 'google-form@adlift.crm' },
-      created_by: 'google_form_webhook',
+      payload: { ...payload, id, fingerprint, created_by_user_id: systemUserId, created_by_email: 'google-form@adlift.crm' },
+      created_by: systemUserId,
       updated_at: payload.submittedAt
     });
 
