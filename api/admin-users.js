@@ -60,6 +60,31 @@ function cleanUser(user) {
   };
 }
 
+async function syncFreelancerRecord(admin, user, role) {
+  if (!user?.id || role !== 'freelancer') return;
+
+  const payload = {
+    id: user.id,
+    name: user.email?.split('@')[0] || 'Freelancer',
+    role: 'Freelancer',
+    email: user.email,
+    user_id: user.id,
+    pay: '',
+    status: 'active',
+    notes: 'Auto-created from Admin → Users',
+    created: new Date().toISOString().slice(0, 10),
+    created_by: 'admin-users-api',
+    deleted: false
+  };
+
+  await admin.from('crm_records').upsert({
+    id: user.id,
+    type: 'freelancers',
+    payload,
+    updated_at: new Date().toISOString()
+  });
+}
+
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
 
@@ -100,6 +125,7 @@ export default async function handler(req, res) {
             app_metadata: { role },
             user_metadata: { role }
           });
+          await syncFreelancerRecord(admin, data.user, role);
         }
         return json(res, 200, { user: cleanUser(data.user), invited: true });
       }
@@ -112,6 +138,7 @@ export default async function handler(req, res) {
         user_metadata: { role }
       });
       if (error) return json(res, 400, { error: error.message });
+      await syncFreelancerRecord(admin, data.user, role);
       return json(res, 200, { user: cleanUser(data.user) });
     }
 
@@ -124,6 +151,7 @@ export default async function handler(req, res) {
         user_metadata: { role }
       });
       if (error) return json(res, 400, { error: error.message });
+      await syncFreelancerRecord(admin, data.user, role);
       return json(res, 200, { user: cleanUser(data.user) });
     }
 
@@ -132,6 +160,12 @@ export default async function handler(req, res) {
       if (!userId) return json(res, 400, { error: 'User ID is required.' });
       const { error } = await admin.auth.admin.deleteUser(userId);
       if (error) return json(res, 400, { error: error.message });
+      await admin.from('crm_records').upsert({
+        id: userId,
+        type: 'freelancers',
+        payload: { id: userId, deleted: true, deletedAt: new Date().toISOString() },
+        updated_at: new Date().toISOString()
+      });
       return json(res, 200, { ok: true });
     }
 
