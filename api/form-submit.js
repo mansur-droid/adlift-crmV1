@@ -50,7 +50,8 @@ export default async function handler(req, res) {
     const { error } = await supabase.from('crm_records').upsert({
       id,
       type: 'submissions',
-      payload: { ...payload, id, fingerprint },
+      payload: { ...payload, id, fingerprint, created_by: 'google_form_webhook', created_by_email: 'google-form@adlift.crm' },
+      created_by: 'google_form_webhook',
       updated_at: payload.submittedAt
     });
 
