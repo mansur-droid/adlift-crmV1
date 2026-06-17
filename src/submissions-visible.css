@@ -1,0 +1,5 @@
+body:has(aside > button.active:nth-of-type(6)) main .card .sectionActions .primary{display:none!important}
+body:has(aside > button.active:nth-of-type(6)) main .card .empty{font-size:0!important}
+body:has(aside > button.active:nth-of-type(6)) main .card .empty:after{content:'No Google Form submissions yet. Submit the connected Google Form once, then refresh this page.';font-size:16px!important}
+body:has(aside > button.active:nth-of-type(6)) main .card .sectionTop p{font-size:0!important}
+body:has(aside > button.active:nth-of-type(6)) main .card .sectionTop p:after{content:'Google Form submissions';font-size:16px!important}
