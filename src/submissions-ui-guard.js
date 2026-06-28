@@ -1,82 +1,24 @@
-function isColdCallStatsActive(){
-  return [...document.querySelectorAll('aside button.active')].some(button=>button.textContent&&button.textContent.includes('Cold Call Stats'));
-}
+import { supabase } from './supabaseClient';
 
-function getColdCallTable(){
-  if(!isColdCallStatsActive())return null;
-  const table=document.querySelector('main table');
-  if(!table)return null;
-  const headers=[...table.querySelectorAll('thead th')].map(th=>th.textContent.trim().toLowerCase());
-  const batchIndex=headers.findIndex(h=>h.includes('imported'));
-  if(batchIndex<0)return null;
-  return {table,batchIndex};
-}
+function isColdCallStatsActive(){return [...document.querySelectorAll('aside button.active')].some(button=>button.textContent&&button.textContent.includes('Cold Call Stats'))}
+function isLeadsActive(){return [...document.querySelectorAll('aside button.active')].some(button=>button.textContent&&button.textContent.trim().includes('Leads'))}
+function getColdCallTable(){if(!isColdCallStatsActive())return null;const table=document.querySelector('main table');if(!table)return null;const headers=[...table.querySelectorAll('thead th')].map(th=>th.textContent.trim().toLowerCase());const batchIndex=headers.findIndex(h=>h.includes('imported'));if(batchIndex<0)return null;return{table,batchIndex}}
+function ensureBatchFilter(){const found=getColdCallTable();if(!found)return;const{table,batchIndex}=found;const searchBox=document.querySelector('main .search');if(!searchBox)return;let wrapper=document.getElementById('coldcall-batch-filter');if(!wrapper){wrapper=document.createElement('div');wrapper.id='coldcall-batch-filter';wrapper.style.display='flex';wrapper.style.alignItems='center';wrapper.style.gap='10px';wrapper.style.margin='12px 0';wrapper.innerHTML='<label style="font-weight:700;color:inherit">Batch</label><select style="min-width:240px;background:#090e1b;border:1px solid #2a3656;color:#fff;border-radius:11px;padding:10px;font:inherit"><option value="">All batches</option></select>';searchBox.parentNode.insertBefore(wrapper,searchBox.nextSibling);wrapper.querySelector('select').addEventListener('change',event=>{localStorage.setItem('coldcall_batch_filter',event.target.value);applyColdCallBatchFilter()})}const select=wrapper.querySelector('select');const rows=[...table.querySelectorAll('tbody tr')];const batches=[...new Set(rows.map(row=>(row.children[batchIndex]?.textContent||'').trim()).filter(Boolean))].sort((a,b)=>b.localeCompare(a,undefined,{sensitivity:'base'}));const current=localStorage.getItem('coldcall_batch_filter')||'';const options=['',...batches];const nextHtml=options.map(value=>`<option value="${escapeHtml(value)}">${value?`Batch: ${escapeHtml(value)}`:'All batches'}</option>`).join('');if(select.innerHTML!==nextHtml)select.innerHTML=nextHtml;select.value=batches.includes(current)?current:''}
+function applyColdCallBatchFilter(){const found=getColdCallTable();if(!found)return;const{table,batchIndex}=found;const selected=document.querySelector('#coldcall-batch-filter select')?.value||'';[...table.querySelectorAll('tbody tr')].forEach(row=>{const batch=(row.children[batchIndex]?.textContent||'').trim();row.style.display=!selected||batch===selected?'':'none'})}
+function sortColdCallRowsByName(){const found=getColdCallTable();if(!found)return;const tbody=found.table.querySelector('tbody');if(!tbody)return;const rows=[...tbody.querySelectorAll('tr')];if(rows.length<2)return;const sorted=[...rows].sort((a,b)=>{const aName=(a.querySelector('td')?.textContent||'').trim().toLowerCase();const bName=(b.querySelector('td')?.textContent||'').trim().toLowerCase();return aName.localeCompare(bName,undefined,{sensitivity:'base'})});if(!rows.every((row,index)=>row===sorted[index]))sorted.forEach(row=>tbody.appendChild(row))}
+function updateColdCallTools(){ensureBatchFilter();sortColdCallRowsByName();applyColdCallBatchFilter()}
 
-function ensureBatchFilter(){
-  const found=getColdCallTable();
-  if(!found)return;
-  const {table,batchIndex}=found;
-  const searchBox=document.querySelector('main .search');
-  if(!searchBox)return;
-
-  let wrapper=document.getElementById('coldcall-batch-filter');
-  if(!wrapper){
-    wrapper=document.createElement('div');
-    wrapper.id='coldcall-batch-filter';
-    wrapper.style.display='flex';
-    wrapper.style.alignItems='center';
-    wrapper.style.gap='10px';
-    wrapper.style.margin='12px 0';
-    wrapper.innerHTML='<label style="font-weight:700;color:inherit">Batch</label><select style="min-width:240px;background:#090e1b;border:1px solid #2a3656;color:#fff;border-radius:11px;padding:10px;font:inherit"><option value="">All batches</option></select>';
-    searchBox.parentNode.insertBefore(wrapper,searchBox.nextSibling);
-    wrapper.querySelector('select').addEventListener('change',event=>{
-      localStorage.setItem('coldcall_batch_filter',event.target.value);
-      applyColdCallBatchFilter();
-    });
-  }
-
-  const select=wrapper.querySelector('select');
-  const rows=[...table.querySelectorAll('tbody tr')];
-  const batches=[...new Set(rows.map(row=>(row.children[batchIndex]?.textContent||'').trim()).filter(Boolean))].sort((a,b)=>b.localeCompare(a,undefined,{sensitivity:'base'}));
-  const current=localStorage.getItem('coldcall_batch_filter')||'';
-  const options=['',...batches];
-  const nextHtml=options.map(value=>`<option value="${value.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}">${value?`Batch: ${value}`:'All batches'}</option>`).join('');
-  if(select.innerHTML!==nextHtml)select.innerHTML=nextHtml;
-  select.value=batches.includes(current)?current:'';
-}
-
-function applyColdCallBatchFilter(){
-  const found=getColdCallTable();
-  if(!found)return;
-  const {table,batchIndex}=found;
-  const selected=document.querySelector('#coldcall-batch-filter select')?.value||'';
-  [...table.querySelectorAll('tbody tr')].forEach(row=>{
-    const batch=(row.children[batchIndex]?.textContent||'').trim();
-    row.style.display=!selected||batch===selected?'':'none';
-  });
-}
-
-function sortColdCallRowsByName(){
-  const found=getColdCallTable();
-  if(!found)return;
-  const tbody=found.table.querySelector('tbody');
-  if(!tbody)return;
-  const rows=[...tbody.querySelectorAll('tr')];
-  if(rows.length<2)return;
-  const sorted=[...rows].sort((a,b)=>{
-    const aName=(a.querySelector('td')?.textContent||'').trim().toLowerCase();
-    const bName=(b.querySelector('td')?.textContent||'').trim().toLowerCase();
-    return aName.localeCompare(bName,undefined,{sensitivity:'base'});
-  });
-  if(!rows.every((row,index)=>row===sorted[index]))sorted.forEach(row=>tbody.appendChild(row));
-}
-
-function updateColdCallTools(){
-  ensureBatchFilter();
-  sortColdCallRowsByName();
-  applyColdCallBatchFilter();
-}
-
-window.addEventListener('load',updateColdCallTools);
-document.addEventListener('click',()=>setTimeout(updateColdCallTools,300));
-setInterval(updateColdCallTools,1500);
+function escapeHtml(value){return String(value||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function parseCsvText(text){const rows=[];let row=[],cell='',q=false;const push=()=>{row.push(cell.trim());cell=''};for(let i=0;i<String(text||'').length;i++){const c=text[i],n=text[i+1];if(c==='"'&&q&&n==='"'){cell+='"';i++}else if(c==='"')q=!q;else if((c===','||c===';'||c==='\t')&&!q)push();else if((c==='\n'||c==='\r')&&!q){if(c==='\r'&&n==='\n')i++;push();if(row.some(Boolean))rows.push(row);row=[]}else cell+=c}push();if(row.some(Boolean))rows.push(row);return rows}
+function key(v){return String(v||'').toLowerCase().replace(/[^a-z0-9]/g,'')}
+function val(row,map,names){for(const name of names){const v=row[map[key(name)]];if(v!==undefined&&String(v).trim())return String(v).trim()}return''}
+function mapLeadRows(rows){if(rows.length<2)return[];const headers=rows[0];const map={};headers.forEach((h,i)=>map[key(h)]=i);return rows.slice(1).map((r,idx)=>({rowNumber:idx+2,name:val(r,map,['Client Name','Full Name']),phone:val(r,map,['Phone','Phone Number']),email:val(r,map,['Email','Email Address']),budget:val(r,map,['Budget']),area:val(r,map,['Area']),timeline:val(r,map,['Timeline']),preApproved:val(r,map,['Pre Approved','Pre-Approved']),workingWithAgent:val(r,map,['Working With Agent']),notes:val(r,map,['Notes'])}))}
+async function currentIsAdmin(){const{data}=await supabase.auth.getSession();const user=data?.session?.user;const role=String(user?.app_metadata?.role||user?.user_metadata?.role||'').toLowerCase();return{isAdmin:role==='admin',user}}
+async function ensureLeadCsvButton(){if(!isLeadsActive()||document.getElementById('lead-csv-import'))return;const info=await currentIsAdmin();if(!info.isAdmin)return;const actions=document.querySelector('main .sectionActions');if(!actions)return;const button=document.createElement('button');button.id='lead-csv-import';button.className='primary';button.innerHTML='<span style="font-size:18px;line-height:0">＋</span> Import CSV';button.onclick=()=>openLeadCsvPicker(info.user);actions.insertBefore(button,actions.firstChild)}
+function openLeadCsvPicker(user){const input=document.createElement('input');input.type='file';input.accept='.csv,text/csv';input.onchange=()=>{const file=input.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=()=>showLeadPreview(String(reader.result||''),user);reader.readAsText(file)};input.click()}
+async function showLeadPreview(text,user){const mapped=mapLeadRows(parseCsvText(text));const existing=await getExistingLeadKeys();let dup=0,failed=0,valid=[];const seenPhones=new Set(),seenEmails=new Set();for(const row of mapped){const phone=row.phone.trim().toLowerCase(),email=row.email.trim().toLowerCase();row._errors=[];if(!row.name)row._errors.push('Missing full name');if(!row.phone)row._errors.push('Missing phone');if(row._errors.length){failed++;continue}if((phone&&(existing.phones.has(phone)||seenPhones.has(phone)))||(email&&(existing.emails.has(email)||seenEmails.has(email)))){dup++;continue}seenPhones.add(phone);if(email)seenEmails.add(email);valid.push(row)}showLeadImportModal(mapped,valid,dup,failed,user)}
+async function getExistingLeadKeys(){const phones=new Set(),emails=new Set();const{data}=await supabase.from('crm_records').select('payload').eq('type','leads');(data||[]).forEach(r=>{const p=r.payload||{};if(p.deleted)return;if(p.phone)phones.add(String(p.phone).trim().toLowerCase());if(p.email)emails.add(String(p.email).trim().toLowerCase())});return{phones,emails}}
+function showLeadImportModal(allRows,validRows,duplicatesSkipped,failedRows,user){const old=document.getElementById('lead-import-modal');if(old)old.remove();const overlay=document.createElement('div');overlay.id='lead-import-modal';overlay.className='overlay';overlay.innerHTML=`<div class="modal" style="max-width:980px"><div class="modalHead"><h2>Import Leads CSV</h2><button type="button" id="lead-import-close">×</button></div><p>Preview before importing. Status will be <b>New</b>, source <b>Meta</b>, import date today.</p><div class="tableWrap" style="max-height:320px;overflow:auto"><table><thead><tr><th>Full Name</th><th>Phone</th><th>Email</th><th>Budget</th><th>Area</th><th>Timeline</th><th>Pre Approved</th><th>Working With Agent</th><th>Notes</th></tr></thead><tbody>${allRows.slice(0,25).map(r=>`<tr><td>${escapeHtml(r.name)}</td><td>${escapeHtml(r.phone)}</td><td>${escapeHtml(r.email)}</td><td>${escapeHtml(r.budget)}</td><td>${escapeHtml(r.area)}</td><td>${escapeHtml(r.timeline)}</td><td>${escapeHtml(r.preApproved)}</td><td>${escapeHtml(r.workingWithAgent)}</td><td>${escapeHtml(r.notes)}</td></tr>`).join('')}</tbody></table></div><div class="statsGrid" style="margin-top:16px"><div class="stat"><span>Total Rows</span><strong>${allRows.length}</strong></div><div class="stat"><span>Ready To Import</span><strong>${validRows.length}</strong></div><div class="stat"><span>Duplicates Skipped</span><strong>${duplicatesSkipped}</strong></div><div class="stat"><span>Failed Rows</span><strong>${failedRows}</strong></div></div><div class="sectionActions" style="margin-top:16px"><button type="button" id="lead-import-cancel">Cancel</button><button type="button" class="primary" id="lead-import-confirm">Confirm Import</button></div><div id="lead-import-result" style="margin-top:12px"></div></div>`;document.body.appendChild(overlay);overlay.querySelector('#lead-import-close').onclick=()=>overlay.remove();overlay.querySelector('#lead-import-cancel').onclick=()=>overlay.remove();overlay.querySelector('#lead-import-confirm').onclick=()=>confirmLeadImport(validRows,allRows.length,duplicatesSkipped,failedRows,user)}
+async function confirmLeadImport(rows,total,dup,failed,user){const result=document.getElementById('lead-import-result');const importDate=new Date().toISOString().slice(0,10);const now=new Date().toISOString();const records=rows.map(row=>{const id=crypto.randomUUID();const payload={id,name:row.name,fullName:row.name,phone:row.phone,email:row.email,value:row.budget,niche:row.area,budget:row.budget,area:row.area,timeline:row.timeline,preApproved:row.preApproved,workingWithAgent:row.workingWithAgent,notes:row.notes,status:'New',source:'Meta',importDate,created:importDate,created_by_user_id:user.id,created_by_email:user.email,deleted:false};return{id,type:'leads',payload,updated_at:now}});if(!records.length){result.className='dataError';result.textContent=`Nothing imported. Total Rows: ${total}, Successfully Imported: 0, Duplicates Skipped: ${dup}, Failed Rows: ${failed}`;return}const{error}=await supabase.from('crm_records').upsert(records);if(error){result.className='dataError';result.textContent=error.message;return}result.className='';result.innerHTML=`Imported successfully.<br>Total Rows: ${total}<br>Successfully Imported: ${records.length}<br>Duplicates Skipped: ${dup}<br>Failed Rows: ${failed}`;setTimeout(()=>location.reload(),1200)}
+function updateLeadTools(){ensureLeadCsvButton()}
+window.addEventListener('load',()=>{updateColdCallTools();updateLeadTools()});document.addEventListener('click',()=>setTimeout(()=>{updateColdCallTools();updateLeadTools()},300));setInterval(()=>{updateColdCallTools();updateLeadTools()},1500);
