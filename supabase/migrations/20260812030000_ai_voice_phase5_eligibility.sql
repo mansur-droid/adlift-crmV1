@@ -51,7 +51,6 @@ declare
   daily_calls int; total_calls int; connected_seconds_total bigint; daily_spend numeric; total_spend numeric;
   daily_limit numeric; total_spend_limit numeric;
   terminal_status text; callback_due boolean := false;
-  reason text := 'eligible';
   details jsonb := '{}'::jsonb;
 begin
   select * into c from public.ai_call_campaigns where id=p_campaign_id;
@@ -100,18 +99,18 @@ begin
     if not (local_time>=c.calling_window_start or local_time<c.calling_window_end) then return jsonb_build_object('eligible',false,'reason_code','outside_calling_window','lead_timezone',tz,'local_time',local_ts); end if;
   end if;
 
+  if exists(select 1 from public.ai_call_attempts where prospect_record_id=r.id and status in ('queued','claimed','initiating','ringing','connected','active_conversation')) then
+    return jsonb_build_object('eligible',false,'reason_code','prospect_already_queued_or_active');
+  end if;
+  select count(*) into active_phone from public.ai_call_attempts where phone_e164=phone and status in ('claimed','initiating','ringing','connected','active_conversation');
+  if active_phone>0 then return jsonb_build_object('eligible',false,'reason_code','phone_already_active','phone_e164',phone); end if;
+
   select count(*), max(coalesce(ended_at,started_at,created_at)) into attempts_count,last_attempt
   from public.ai_call_attempts where campaign_id=c.id and prospect_record_id=r.id;
   if attempts_count>=c.max_attempts_per_prospect then return jsonb_build_object('eligible',false,'reason_code','attempt_limit_reached','attempts',attempts_count); end if;
   if last_attempt is not null and p_at < last_attempt + make_interval(mins=>c.min_retry_delay_minutes) then
     return jsonb_build_object('eligible',false,'reason_code','retry_cooldown','retry_after',last_attempt + make_interval(mins=>c.min_retry_delay_minutes));
   end if;
-
-  if exists(select 1 from public.ai_call_attempts where prospect_record_id=r.id and status in ('queued','claimed','initiating','ringing','connected','active_conversation')) then
-    return jsonb_build_object('eligible',false,'reason_code','prospect_already_queued_or_active');
-  end if;
-  select count(*) into active_phone from public.ai_call_attempts where phone_e164=phone and status in ('claimed','initiating','ringing','connected','active_conversation');
-  if active_phone>0 then return jsonb_build_object('eligible',false,'reason_code','phone_already_active','phone_e164',phone); end if;
 
   select count(*) into active_campaign from public.ai_call_attempts where campaign_id=c.id and status in ('claimed','initiating','ringing','connected','active_conversation');
   if active_campaign>=c.max_concurrent_calls then return jsonb_build_object('eligible',false,'reason_code','concurrency_limit_reached','active_calls',active_campaign); end if;
