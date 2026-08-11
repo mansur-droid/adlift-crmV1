@@ -1,0 +1,59 @@
+name: Phase 6 checks
+on: [push, workflow_dispatch]
+jobs:
+  phase6:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: {POSTGRES_PASSWORD: postgres, POSTGRES_DB: postgres}
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGPASSWORD: postgres
+      # Deliberately no live Twilio credentials. CI can never originate a real call.
+      TWILIO_CONTROLLED_TEST_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 22, cache: npm}
+      - name: Reconcile lockfile for Phase 6 dependency
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: npm ci
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Vite production build
+        run: npm run build
+      - name: Prepare Supabase-compatible PostgreSQL
+        run: |
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL'
+          create schema if not exists auth;
+          create table if not exists auth.users(id uuid primary key default gen_random_uuid());
+          create or replace function auth.jwt() returns jsonb language sql stable as $$ select '{}'::jsonb $$;
+          create role anon nologin; create role authenticated nologin; create role service_role nologin;
+          SQL
+      - name: Apply Phase 3-6 migrations
+        run: |
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f supabase/migrations/20260812010000_ai_voice_phase3_foundation.sql
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f supabase/migrations/20260812020000_ai_voice_phase4_admin_fields.sql
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f supabase/migrations/20260812030000_ai_voice_phase5_eligibility.sql
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f supabase/migrations/20260812040000_ai_voice_phase6_twilio.sql
+      - name: Phase 5 regression tests
+        run: |
+          grep -q "Eligibility integration tests" .github/workflows/phase5-checks.yml
+          grep -q "Race and duplicate integration test" .github/workflows/phase5-checks.yml
+      - name: Phase 6 static safety assertions
+        run: |
+          grep -q "TWILIO_CONTROLLED_TEST_ENABLED" api/ai-controlled-test-call.js
+          grep -q "Bulk live dialing is disabled" api/ai-controlled-test-call.js
+          grep -q "validateRequest" api/_telephony/twilio.js
+          grep -q "ai_provider_webhook_events" api/twilio-webhook.js
+          grep -q "terminal_regression_blocked" supabase/migrations/20260812040000_ai_voice_phase6_twilio.sql
+          grep -q "cost_reconcile_attempts>=5" api/ai-telephony-attempt.js
+          ! grep -R "TWILIO_AUTH_TOKEN" src || false
+      - name: Confirm CI cannot dial
+        run: |
+          test "$TWILIO_CONTROLLED_TEST_ENABLED" = "false"
+          test -z "$TWILIO_ACCOUNT_SID"
+          test -z "$TWILIO_AUTH_TOKEN"
+          test -z "$TWILIO_FROM_NUMBER"
