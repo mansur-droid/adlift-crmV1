@@ -50,7 +50,7 @@ declare
   attempts_count int; last_attempt timestamptz; active_campaign int; active_phone int;
   daily_calls int; total_calls int; connected_seconds_total bigint; daily_spend numeric; total_spend numeric;
   daily_limit numeric; total_spend_limit numeric;
-  terminal_status text;
+  terminal_status text; callback_due boolean := false;
   reason text := 'eligible';
   details jsonb := '{}'::jsonb;
 begin
@@ -83,11 +83,12 @@ begin
    where cb.prospect_record_id=r.id and cb.status in ('scheduled','due','claimed')
      and (cb.campaign_id is null or cb.campaign_id=c.id)
    order by cb.scheduled_for asc limit 1;
-  if found and open_cb.scheduled_for>p_at then
+  callback_due := found;
+  if callback_due and open_cb.scheduled_for>p_at then
     return jsonb_build_object('eligible',false,'reason_code','callback_scheduled','callback_id',open_cb.id,'scheduled_for',open_cb.scheduled_for,'lead_timezone',open_cb.lead_timezone);
   end if;
 
-  tz := case when found and open_cb.lead_timezone is not null and public.ai_valid_timezone(open_cb.lead_timezone) then open_cb.lead_timezone else public.ai_effective_timezone(c,r.payload) end;
+  tz := case when callback_due and open_cb.lead_timezone is not null and public.ai_valid_timezone(open_cb.lead_timezone) then open_cb.lead_timezone else public.ai_effective_timezone(c,r.payload) end;
   if tz is null then return jsonb_build_object('eligible',false,'reason_code','timezone_unresolved','phone_e164',phone); end if;
   local_ts := p_at at time zone tz;
   local_day := extract(dow from local_ts)::int;
@@ -131,8 +132,8 @@ begin
 
   details := jsonb_build_object(
     'eligible',true,'reason_code','eligible','phone_e164',phone,'lead_timezone',tz,
-    'timezone_source',case when found then 'callback' when c.timezone_strategy='fixed' then 'campaign' else 'crm' end,
-    'attempt_number',attempts_count+1,'callback_due',found,'callback_id',case when found then open_cb.id else null end,
+    'timezone_source',case when callback_due then 'callback' when c.timezone_strategy='fixed' then 'campaign' else 'crm' end,
+    'attempt_number',attempts_count+1,'callback_due',callback_due,'callback_id',case when callback_due then open_cb.id else null end,
     'local_time',local_ts,'daily_calls',daily_calls,'total_calls',total_calls,'active_calls',active_campaign,
     'connected_seconds_today',connected_seconds_total,'daily_spend',daily_spend,'campaign_spend',total_spend
   );
