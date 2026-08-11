@@ -1,0 +1,105 @@
+name: Phase 3 checks
+
+on:
+  push:
+    branches:
+      - phase3-ai-voice-database
+  workflow_dispatch:
+
+jobs:
+  build-and-migration-smoke:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      PGPASSWORD: postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build CRM
+        run: npm run build
+
+      - name: Prepare minimal Supabase-compatible Postgres roles and schema
+        run: |
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL'
+          create extension if not exists pgcrypto;
+          do $$ begin create role anon; exception when duplicate_object then null; end $$;
+          do $$ begin create role authenticated; exception when duplicate_object then null; end $$;
+          do $$ begin create role service_role; exception when duplicate_object then null; end $$;
+          create schema if not exists auth;
+          create table if not exists auth.users (id uuid primary key default gen_random_uuid());
+          create or replace function auth.uid() returns uuid language sql stable as $$ select null::uuid $$;
+          create or replace function auth.jwt() returns jsonb language sql stable as $$ select '{}'::jsonb $$;
+          create table if not exists public.crm_records (
+            id uuid primary key default gen_random_uuid(),
+            type text not null,
+            payload jsonb not null default '{}'::jsonb,
+            created_by uuid references auth.users(id),
+            created_at timestamptz not null default now(),
+            updated_at timestamptz not null default now()
+          );
+          SQL
+
+      - name: Apply Phase 3 migration
+        run: psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f supabase/migrations/20260812010000_ai_voice_phase3_foundation.sql
+
+      - name: Verify Phase 3 tables and queue function
+        run: |
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            missing text[];
+          begin
+            select array_agg(expected.name)
+            into missing
+            from (values
+              ('ai_provider_configs'),
+              ('ai_call_campaigns'),
+              ('ai_campaign_instructions'),
+              ('ai_company_knowledge'),
+              ('ai_company_regulations'),
+              ('ai_call_attempts'),
+              ('ai_call_events'),
+              ('ai_provider_webhook_events'),
+              ('ai_transcript_segments'),
+              ('ai_callbacks'),
+              ('ai_suppressions'),
+              ('ai_recordings'),
+              ('ai_call_outcomes'),
+              ('ai_pre_call_briefs'),
+              ('ai_pre_call_brief_facts'),
+              ('ai_pre_call_brief_fact_evidence')
+            ) as expected(name)
+            where to_regclass('public.' || expected.name) is null;
+
+            if missing is not null then
+              raise exception 'Missing Phase 3 tables: %', missing;
+            end if;
+
+            if to_regprocedure('public.ai_claim_next_call_attempt(text,integer,uuid)') is null then
+              raise exception 'Queue claim function missing';
+            end if;
+          end $$;
+          SQL
