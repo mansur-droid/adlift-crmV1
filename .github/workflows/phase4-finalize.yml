@@ -1,0 +1,116 @@
+name: Phase 4 finalize
+
+on:
+  push:
+    paths:
+      - .github/workflows/phase4-finalize.yml
+
+permissions:
+  contents: write
+
+jobs:
+  finalize-and-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Integrate AI Calling into existing CRM navigation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('src/main.jsx')
+          s=p.read_text()
+          s=s.replace("import BillingStats from'./BillingStats';", "import BillingStats from'./BillingStats';\nimport AICallingAdmin from'./AICallingAdmin';")
+          s=s.replace("['stats',BarChart3,'Cold Call Stats'],['activity',History,'Activity Log']", "['stats',BarChart3,'Cold Call Stats'],['aiCalling',Phone,'AI Calling'],['activity',History,'Activity Log']")
+          s=s.replace("'stats','activity'],recordTypes", "'stats','aiCalling','activity'],recordTypes")
+          s=s.replace("activeTab==='activity'?<ActivityLog logs={store.data.activity_logs}/>:<TableSection", "activeTab==='aiCalling'?<AICallingAdmin/>:activeTab==='activity'?<ActivityLog logs={store.data.activity_logs}/>:<TableSection")
+          p.write_text(s)
+          PY
+
+      - name: Finish structured AI Calling editor behavior
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('src/AICallingAdmin.jsx')
+          s=p.read_text()
+          s=s.replace("delete payload.__new;if(table==='ai_company_knowledge'){delete payload.enabled;payload.tags", "delete payload.__new;if(table==='ai_company_knowledge'){payload.tags")
+          s=s.replace("<p>{k.content}</p><div className=\"tagRow\">", "<p>{k.content}</p><div className=\"aiMeta\"><span>{k.enabled?'Enabled':'Disabled'}</span></div><div className=\"tagRow\">")
+          s=s.replace("<Field label=\"Fact\" wide><textarea", "<Field label=\"Enabled\"><input type=\"checkbox\" checked={row.enabled!==false} onChange={e=>set('enabled',e.target.checked)}/></Field><Field label=\"Fact\" wide><textarea")
+          s=s.replace("<Field label=\"Status\"><select value={row.status||'draft'}", "<Field label=\"Description\" wide><textarea value={row.description||''} onChange={e=>set('description',e.target.value)}/></Field><Field label=\"Status\"><select value={row.status||'draft'}")
+          s=s.replace("<option value=\"opening\">Opening guidance</option><option value=\"qualification\">Qualification criteria</option><option value=\"objection\">Objection guidance</option><option value=\"closing\">Closing guidance</option><option value=\"guidance\">Discovery / transfer / booking guidance</option>", "<option value=\"personality\">Agent personality</option><option value=\"opening\">Opening guidance</option><option value=\"discovery\">Discovery questions</option><option value=\"qualification\">Qualification criteria</option><option value=\"objection\">Objection guidance</option><option value=\"closing\">Closing guidance</option><option value=\"transfer\">Transfer criteria</option><option value=\"appointment\">Appointment-booking guidance</option><option value=\"guidance\">General guidance</option>")
+          s=s.replace("<Status ok={Boolean(st?.configured)}>{st?.configured?'Configured':'Missing secret'}</Status>", "<Status ok={Boolean(st?.configured)}>{st?.configured?'Configured':st?.requiredSecretCheckKnown===false?'Secret check not defined':'Missing secret'}</Status>")
+          p.write_text(s)
+          PY
+
+      - name: Add AI Calling styles without changing existing layout
+        run: |
+          cat >> src/styles.css <<'CSS'
+
+          /* Phase 4 — AI Calling admin */
+          .aiAdmin{display:flex;flex-direction:column;gap:18px;max-width:1400px;margin:0 auto}.aiHero{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;padding:22px;border:1px solid var(--border,#283044);border-radius:16px;background:var(--card,#131722)}.aiHero h1{margin:5px 0 6px}.aiHero p{max-width:760px;margin:0;opacity:.72}.aiEyebrow{display:flex;gap:8px;align-items:center;font-weight:700;font-size:13px;opacity:.8}.aiTabs{display:flex;gap:8px;flex-wrap:wrap}.aiTabs button{display:flex;align-items:center;gap:7px}.aiTabs button.active{background:var(--accent,#6d5dfc);color:white}.aiToolbar{display:flex;align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap}.aiToolbar h2{margin:0}.aiCards{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}.aiCard{border:1px solid var(--border,#283044);border-radius:14px;padding:16px;background:var(--card,#131722)}.aiCard.hard{border-color:#8d3a3a}.aiCardHead{display:flex;justify-content:space-between;gap:14px;align-items:flex-start}.aiCard h3{margin:4px 0}.aiCard p{white-space:pre-wrap;opacity:.82}.aiMeta,.tagRow,.aiActions{display:flex;gap:8px;flex-wrap:wrap}.aiMeta span,.tagRow span,.pill,.aiStatus{font-size:12px;border:1px solid var(--border,#283044);border-radius:999px;padding:5px 8px}.pill.on,.pill.verified,.aiStatus.ok{border-color:#2f8b57}.pill.hard,.aiStatus.warn{border-color:#a34a4a}.aiStatus{display:inline-flex;align-items:center;gap:5px}.aiActions{margin-top:14px}.aiActions .danger{margin-left:auto}.aiHardBanner{display:flex;gap:12px;padding:14px;border:1px solid #8d3a3a;border-radius:12px;background:rgba(145,47,47,.08)}.aiHardBanner div{display:flex;flex-direction:column;gap:3px}.aiHardBanner span{font-size:13px;opacity:.75}.aiProviderNotice,.aiEmpty,.aiLoading,.aiAlert{padding:14px;border:1px solid var(--border,#283044);border-radius:12px}.aiAlert.success{border-color:#2f8b57}.aiAlert.error{border-color:#a34a4a}.aiSearch{display:flex;align-items:center;gap:6px;border:1px solid var(--border,#283044);border-radius:9px;padding:0 9px}.aiSearch input{border:0;background:transparent}.aiModal{width:min(900px,94vw);max-height:90vh;overflow:auto}.aiField{display:flex;flex-direction:column;gap:6px}.aiWide{grid-column:1/-1}.aiField>span{font-size:12px;font-weight:700;opacity:.72}.aiField textarea{min-height:90px}.dayRow{display:flex;gap:6px;flex-wrap:wrap}.dayRow button.selected{background:var(--accent,#6d5dfc);color:#fff}.spin{animation:aiSpin 1s linear infinite}@keyframes aiSpin{to{transform:rotate(360deg)}}@media(max-width:760px){.aiHero{flex-direction:column}.aiCards{grid-template-columns:1fr}.aiToolbar{align-items:stretch}.aiSearch{width:100%}}
+          CSS
+
+      - name: Reconcile package-lock without changing requested dependency ranges
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+
+      - name: Commit reconciled Phase 4 files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json src/main.jsx src/AICallingAdmin.jsx src/styles.css
+          git diff --cached --quiet || git commit -m "Finalize Phase 4 AI Calling admin layer"
+          git push origin HEAD:main
+
+      - name: Verify reproducible install
+        run: npm ci --no-audit --no-fund
+
+      - name: Build CRM
+        run: npm run build
+
+      - name: Prepare Supabase-compatible Postgres smoke database
+        run: |
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL'
+          create extension if not exists pgcrypto;
+          do $$ begin create role anon; exception when duplicate_object then null; end $$;
+          do $$ begin create role authenticated; exception when duplicate_object then null; end $$;
+          do $$ begin create role service_role; exception when duplicate_object then null; end $$;
+          create schema if not exists auth;
+          create table if not exists auth.users(id uuid primary key default gen_random_uuid());
+          create or replace function auth.uid() returns uuid language sql stable as $$ select null::uuid $$;
+          create or replace function auth.jwt() returns jsonb language sql stable as $$ select '{}'::jsonb $$;
+          create table public.crm_records(id uuid primary key default gen_random_uuid(),type text not null,payload jsonb not null default '{}'::jsonb,created_by uuid references auth.users(id),created_at timestamptz default now(),updated_at timestamptz default now());
+          SQL
+      - name: Apply Phase 3 and Phase 4 migrations
+        run: |
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f supabase/migrations/20260812010000_ai_voice_phase3_foundation.sql
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f supabase/migrations/20260812020000_ai_voice_phase4_admin_fields.sql
+      - name: Verify Phase 4 schema
+        run: |
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL'
+          do $$ begin
+            if not exists(select 1 from information_schema.columns where table_schema='public' and table_name='ai_call_campaigns' and column_name='description') then raise exception 'campaign description missing'; end if;
+            if not exists(select 1 from information_schema.columns where table_schema='public' and table_name='ai_company_knowledge' and column_name='enabled') then raise exception 'knowledge enabled missing'; end if;
+          end $$;
+          SQL
