@@ -1,0 +1,21 @@
+name: Reconcile lockfile
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - package.json
+      - .github/workflows/lockfile-reconcile.yml
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reconciled-package-lock
+          path: package-lock.json
