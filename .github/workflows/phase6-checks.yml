@@ -1,57 +1,104 @@
 name: Phase 6 checks
-on: [push, workflow_dispatch]
+on:
+  push:
+    branches: [phase6-twilio-telephony, main]
+  workflow_dispatch:
+
 jobs:
   phase6:
     runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:16
-        env: {POSTGRES_PASSWORD: postgres, POSTGRES_DB: postgres}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
         ports: ['5432:5432']
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       PGPASSWORD: postgres
-      # Deliberately no live Twilio credentials. CI can never originate a real call.
+      # Hard no-call CI boundary. No live Twilio credentials are ever injected here.
       TWILIO_CONTROLLED_TEST_ENABLED: 'false'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: {node-version: 22, cache: npm}
-      - name: Reconcile lockfile for Phase 6 dependency
-        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
-      - name: npm ci
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Reproducible npm ci
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Phase 6 Node tests with mocked/no-call provider paths
+        run: npm run test:phase6
       - name: Vite production build
         run: npm run build
+
       - name: Prepare Supabase-compatible PostgreSQL
         run: |
           psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL'
+          create extension if not exists pgcrypto;
+          do $$ begin create role anon nologin; exception when duplicate_object then null; end $$;
+          do $$ begin create role authenticated nologin; exception when duplicate_object then null; end $$;
+          do $$ begin create role service_role nologin; exception when duplicate_object then null; end $$;
           create schema if not exists auth;
           create table if not exists auth.users(id uuid primary key default gen_random_uuid());
+          create or replace function auth.uid() returns uuid language sql stable as $$ select null::uuid $$;
           create or replace function auth.jwt() returns jsonb language sql stable as $$ select '{}'::jsonb $$;
-          create role anon nologin; create role authenticated nologin; create role service_role nologin;
+          create table if not exists public.crm_records(
+            id uuid primary key default gen_random_uuid(),
+            type text not null,
+            payload jsonb not null default '{}'::jsonb,
+            created_by uuid references auth.users(id),
+            created_at timestamptz not null default now(),
+            updated_at timestamptz not null default now()
+          );
           SQL
-      - name: Apply Phase 3-6 migrations
+
+      - name: Apply fresh Phase 3 + 4 + 5 + 6 migrations
         run: |
           psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f supabase/migrations/20260812010000_ai_voice_phase3_foundation.sql
           psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f supabase/migrations/20260812020000_ai_voice_phase4_admin_fields.sql
           psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f supabase/migrations/20260812030000_ai_voice_phase5_eligibility.sql
           psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f supabase/migrations/20260812040000_ai_voice_phase6_twilio.sql
-      - name: Phase 5 regression tests
+
+      - name: Existing Phase 5 eligibility regression suite
+        run: psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f tests/phase5-regression.sql
+      - name: Phase 6 lifecycle, duplicate, lease and idempotency integration tests
+        run: psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f tests/phase6-db.sql
+
+      - name: Concurrent controlled-origination reservation race
         run: |
-          grep -q "Eligibility integration tests" .github/workflows/phase5-checks.yml
-          grep -q "Race and duplicate integration test" .github/workflows/phase5-checks.yml
-      - name: Phase 6 static safety assertions
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL'
+          update ai_call_attempts set created_at=now()-interval '5 minutes' where controlled_test;
+          insert into ai_call_campaigns(id,name,status,enabled,telephony_provider_slug,timezone_strategy,fixed_timezone,calling_days,calling_window_start,calling_window_end,max_attempts_per_prospect,min_retry_delay_minutes,max_calls_per_day,max_connected_minutes_per_day,max_concurrent_calls)
+          values('66666666-6666-4666-8666-666666666666','Race','active',true,'twilio','fixed','Europe/Brussels',array[0,1,2,3,4,5,6],time '00:00',time '23:59',10,0,100,600,10);
+          insert into crm_records(id,type,payload) values
+          ('66666666-6666-4666-8666-666666666661','stats','{"phone":"+32475555001","status":"dialed"}'),
+          ('66666666-6666-4666-8666-666666666662','stats','{"phone":"+32475555002","status":"dialed"}');
+          SQL
+          (psql -h localhost -U postgres -d postgres -Atc "select ai_reserve_controlled_test_attempt('66666666-6666-4666-8666-666666666666','+32475555001','phase6_race_request_0001',60)" >/tmp/race1 2>&1) & P1=$!
+          (psql -h localhost -U postgres -d postgres -Atc "select ai_reserve_controlled_test_attempt('66666666-6666-4666-8666-666666666666','+32475555002','phase6_race_request_0002',60)" >/tmp/race2 2>&1) & P2=$!
+          wait $P1; wait $P2
+          cat /tmp/race1 /tmp/race2
+          COUNT=$(psql -h localhost -U postgres -d postgres -Atc "select count(*) from ai_call_attempts where origin_request_key in ('phase6_race_request_0001','phase6_race_request_0002')")
+          test "$COUNT" = "1"
+
+      - name: Phase 6 hard safety assertions
         run: |
-          grep -q "TWILIO_CONTROLLED_TEST_ENABLED" api/ai-controlled-test-call.js
+          grep -q "TWILIO_CONTROLLED_TEST_ENABLED" api/ai-controlled-test-call.js api/_telephony/server.js
           grep -q "Bulk live dialing is disabled" api/ai-controlled-test-call.js
+          grep -q "ai_reserve_controlled_test_attempt" api/ai-controlled-test-call.js supabase/migrations/20260812040000_ai_voice_phase6_twilio.sql
           grep -q "validateRequest" api/_telephony/twilio.js
           grep -q "ai_provider_webhook_events" api/twilio-webhook.js
+          grep -q "stale_sequence" supabase/migrations/20260812040000_ai_voice_phase6_twilio.sql
           grep -q "terminal_regression_blocked" supabase/migrations/20260812040000_ai_voice_phase6_twilio.sql
-          grep -q "cost_reconcile_attempts>=5" api/ai-telephony-attempt.js
-          ! grep -R "TWILIO_AUTH_TOKEN" src || false
-      - name: Confirm CI cannot dial
+          grep -q "MAX_COST_RECONCILE_ATTEMPTS=5" api/ai-telephony-attempt.js
+          ! grep -R "Start AI Campaign" src
+          ! grep -R "TWILIO_AUTH_TOKEN" src
+
+      - name: Confirm CI has no path to a real call
         run: |
           test "$TWILIO_CONTROLLED_TEST_ENABLED" = "false"
           test -z "$TWILIO_ACCOUNT_SID"
