@@ -1,6 +1,6 @@
 \set ON_ERROR_STOP on
 
--- Reservation, idempotency, exact-one semantics and lease recovery.
+-- Reservation, idempotency, exact-one semantics, rate limiting and lease recovery.
 do $$
 declare c uuid:=gen_random_uuid(); p1 uuid:=gen_random_uuid(); p2 uuid:=gen_random_uuid(); p3 uuid:=gen_random_uuid(); p4 uuid:=gen_random_uuid(); p5 uuid:=gen_random_uuid(); j jsonb; j2 jsonb; a uuid; tok text;
 begin
@@ -13,6 +13,7 @@ begin
  if (select count(*) from ai_call_attempts where origin_request_key='phase6_reserve_key_0001')<>1 then raise exception 'duplicate reservation inserted'; end if;
  j:=ai_claim_controlled_test_attempt(a,'worker-one',120);if not (j->>'claimed')::boolean then raise exception 'claim failed %',j; end if;tok:=j->>'lock_token';
  update ai_call_attempts set provider_call_id='CA11111111111111111111111111111111' where id=a;
+ if (select provider_call_id from ai_call_attempts where id=a)<>'CA11111111111111111111111111111111' then raise exception 'Call SID persistence failed'; end if;
  j:=ai_claim_controlled_test_attempt(a,'worker-two',120);if j->>'reason'<>'already_originated' then raise exception 'duplicate origination protection failed %',j; end if;
  update ai_call_attempts set status='completed',provider_status='completed',created_at=now()-interval '2 minutes',initiated_at=now()-interval '30 seconds',ended_at=now(),completed_at=now(),lock_token=null,locked_by=null,locked_at=null,lock_expires_at=null where id=a;
 
@@ -23,7 +24,9 @@ begin
 
  j:=ai_reserve_controlled_test_attempt(c,'+32472222003','phase6_reserve_key_0003',60);if not (j->>'reserved')::boolean then raise exception 'active test setup failed %',j; end if;a:=(j->>'attempt_id')::uuid;
  j2:=ai_reserve_controlled_test_attempt(c,'+32472222004','phase6_reserve_key_0004',60);if j2->>'reason'<>'active_controlled_test_exists' then raise exception 'active controlled test safeguard failed %',j2; end if;
- update ai_call_attempts set status='cancelled',created_at=now()-interval '2 minutes',ended_at=now(),completed_at=now() where id=a;
+ update ai_call_attempts set status='cancelled',ended_at=now(),completed_at=now() where id=a;
+ j2:=ai_reserve_controlled_test_attempt(c,'+32472222004','phase6_reserve_key_0004',60);if j2->>'reason'<>'controlled_test_rate_limited' then raise exception 'controlled-test rate limit failed %',j2; end if;
+ update ai_call_attempts set created_at=now()-interval '2 minutes' where id=a;
 
  j:=ai_reserve_controlled_test_attempt(c,'0472222005','phase6_reserve_key_0005',60);if j->>'reason'<>'invalid_e164' then raise exception 'ambiguous local number accepted %',j; end if;
  insert into ai_suppressions(prospect_record_id,scope,suppression_type,active) values(p5,'global','do_not_call',true);
@@ -55,7 +58,7 @@ begin
  foreach st in array array['busy','no-answer','canceled','failed'] loop
   i:=i+1;p:=gen_random_uuid();insert into crm_records(id,type,payload) values(p,'stats',jsonb_build_object('phone','+32474444'||lpad(i::text,3,'0'),'status','dialed'));
   insert into ai_call_attempts(campaign_id,prospect_record_id,phone_e164,attempt_number,status,telephony_provider_slug,provider_call_id,controlled_test,initiated_at,started_at)
-  values(c,p,'+32474444'||lpad(i::text,3,'0'),1,'initiating','twilio','CA'||lpad(i::text,32,i::text),true,'2026-08-12 00:01:00+00','2026-08-12 00:01:00+00') returning id into a;
+  values(c,p,'+32474444'||lpad(i::text,3,'0'),1,'initiating','twilio','CA'||lpad((9000+i)::text,32,'0'),true,'2026-08-12 00:01:00+00','2026-08-12 00:01:00+00') returning id into a;
   r:=ai_apply_twilio_event(a,'term-'||i,st,'{"SequenceNumber":"0","CallDuration":"0"}','2026-08-12 00:01:10+00');
   expected:=case st when 'busy' then 'busy' when 'no-answer' then 'no_answer' when 'canceled' then 'cancelled' else 'provider_failed' end;
   if (select status from ai_call_attempts where id=a)<>expected then raise exception 'terminal mapping % -> % failed',st,expected; end if;
