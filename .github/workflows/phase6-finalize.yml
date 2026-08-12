@@ -1,0 +1,40 @@
+name: Phase 6 finalize integration
+on:
+  push:
+    branches: [phase6-twilio-telephony]
+permissions:
+  contents: write
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-node@v4
+        with: {node-version: 22, cache: npm}
+      - name: Integrate Controlled Test Call into AI Calling admin
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/AICallingAdmin.jsx')
+          s=p.read_text()
+          if "import ControlledTestCall" not in s:
+              s=s.replace("import AIEligibilityPanel from'./AIEligibilityPanel';", "import AIEligibilityPanel from'./AIEligibilityPanel';\nimport ControlledTestCall from'./ControlledTestCall';")
+          s=s.replace("['providers','Providers',Server],['eligibility','Eligibility & Queue',Bot]]", "['providers','Providers',Server],['eligibility','Eligibility & Queue',Bot],['controlled','Controlled Test Call',Bot]]")
+          if "section==='controlled'" not in s:
+              s=s.replace("{section==='eligibility'&&<AIEligibilityPanel campaigns={campaigns}/>}", "{section==='eligibility'&&<AIEligibilityPanel campaigns={campaigns}/>}\n  {section==='controlled'&&<ControlledTestCall campaigns={campaigns}/>}")
+          s=s.replace("Configure the AI SDR safely. Telephony is not connected yet, so campaign controls configure data only and cannot place calls.", "Configure the AI SDR safely. Phase 6 telephony is controlled-test only; bulk campaign dialing and automatic queue consumption remain disabled.")
+          s=s.replace("<Status ok={false}>Telephony not connected</Status>", "<Status ok={false}>Controlled test only</Status>")
+          p.write_text(s)
+          PY
+      - name: Reconcile package lock
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Commit finalized integration
+        run: |
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add src/AICallingAdmin.jsx package-lock.json
+            git commit -m "Finalize Phase 6 admin integration and lockfile"
+            git push origin HEAD:phase6-twilio-telephony
+          fi
