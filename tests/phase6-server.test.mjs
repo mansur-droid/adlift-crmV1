@@ -1,0 +1,29 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {requireAdmin,e164} from '../api/_telephony/server.js';
+import {createControlledTestHandler} from '../api/ai-controlled-test-call.js';
+import {buildCostPatch,buildCostFailurePatch} from '../api/ai-telephony-attempt.js';
+
+function res(){return {statusCode:200,body:null,headers:{},setHeader(k,v){this.headers[k]=v},status(n){this.statusCode=n;return this},json(v){this.body=v;return this}}}
+function fakeReq({method='GET',token='',body={},query={}}={}){return {method,body,query,headers:{authorization:token?`Bearer ${token}`:''}}}
+
+function authClientFactory(user){let calls=0;return ()=>{calls++;if(calls===1)return {auth:{getUser:async()=>user?{data:{user},error:null}:{data:null,error:new Error('bad')}}};return {service:true}}}
+
+test('unauthenticated user is rejected server-side',async()=>{const r=res();const out=await requireAdmin(fakeReq(),r,{config:{url:'u',anon:'a',service:'s'},createClientFn:authClientFactory(null)});assert.equal(out,null);assert.equal(r.statusCode,401)});
+test('freelancer/non-admin is rejected server-side',async()=>{const r=res();const out=await requireAdmin(fakeReq({token:'x'}),r,{config:{url:'u',anon:'a',service:'s'},createClientFn:authClientFactory({id:'u',app_metadata:{role:'freelancer'}})});assert.equal(out,null);assert.equal(r.statusCode,403)});
+test('admin is accepted server-side',async()=>{const r=res();const out=await requireAdmin(fakeReq({token:'x'}),r,{config:{url:'u',anon:'a',service:'s'},createClientFn:authClientFactory({id:'u',app_metadata:{role:'admin'}})});assert.equal(r.statusCode,200);assert.equal(out.user.id,'u');assert.equal(out.admin.service,true)});
+test('actual dialing accepts only explicit international E.164',()=>{assert.equal(e164('+32470000001'),'+32470000001');assert.equal(e164('0470000001'),null);assert.equal(e164('0032470000001'),null)});
+
+const noCallProvider={status:()=>({configured:true,readyForTest:true,fromNumber:'+15005550006'}),createCall:async()=>{throw new Error('createCall must not be reached')},cancelCall:async()=>{throw new Error('cancelCall must not be reached')}};
+const adminAuth=async()=>({admin:{},user:{id:'admin'}});
+
+test('bulk live dialing is hard-rejected before provider access',async()=>{const h=createControlledTestHandler({providerFactory:()=>noCallProvider,requireAdminFn:adminAuth,liveEnabledFn:()=>true});const r=res();await h(fakeReq({method:'POST',body:{action:'bulk'}}),r);assert.equal(r.statusCode,403);assert.match(r.body.error,/Bulk live dialing is disabled/)});
+test('controlled test gate is OFF unless server explicitly enables it',async()=>{const h=createControlledTestHandler({providerFactory:()=>noCallProvider,requireAdminFn:adminAuth,liveEnabledFn:()=>false});const r=res();await h(fakeReq({method:'POST',body:{action:'place'}}),r);assert.equal(r.statusCode,423)});
+test('explicit confirmation is mandatory',async()=>{const h=createControlledTestHandler({providerFactory:()=>noCallProvider,requireAdminFn:adminAuth,liveEnabledFn:()=>true});const r=res();await h(fakeReq({method:'POST',body:{action:'place'}}),r);assert.equal(r.statusCode,400);assert.match(r.body.error,/confirmation/i)});
+test('ambiguous local destination is rejected before database/provider access',async()=>{const h=createControlledTestHandler({providerFactory:()=>noCallProvider,requireAdminFn:adminAuth,liveEnabledFn:()=>true});const r=res();await h(fakeReq({method:'POST',body:{action:'place',confirmation:'PLACE ONE REAL TWILIO CALL',campaignId:'11111111-1111-4111-8111-111111111111',destination:'0470000001'}}),r);assert.equal(r.statusCode,400);assert.match(r.body.error,/E.164/)});
+test('missing Twilio configuration blocks origination',async()=>{const provider={...noCallProvider,status:()=>({configured:false,readyForTest:false,configurationError:'missing'})};const h=createControlledTestHandler({providerFactory:()=>provider,requireAdminFn:adminAuth,liveEnabledFn:()=>true});const r=res();await h(fakeReq({method:'POST',body:{action:'place',confirmation:'PLACE ONE REAL TWILIO CALL',campaignId:'11111111-1111-4111-8111-111111111111',destination:'+32470000001'}}),r);assert.equal(r.statusCode,503)});
+
+test('cost reconciliation never labels unavailable price authoritative',()=>{const a={cost_reconcile_attempts:0,cost_currency:'USD'};const p=buildCostPatch(a,{available:false,price:null,currency:null,status:'completed'});assert.equal(p.cost_status,'pending');assert.equal('actual_cost'in p,false)});
+test('fifth unavailable cost check becomes unavailable, not invented',()=>{const a={cost_reconcile_attempts:4,cost_currency:'USD'};const p=buildCostPatch(a,{available:false,price:null});assert.equal(p.cost_status,'unavailable');assert.equal('actual_cost'in p,false)});
+test('authoritative cost and connected duration are persisted separately from total duration',()=>{const a={cost_reconcile_attempts:1,cost_currency:'USD',answered_at:'2026-08-12T00:00:10Z',duration_seconds:30};const p=buildCostPatch(a,{available:true,price:-0.013,currency:'USD',connectedDuration:20,status:'completed'});assert.equal(p.cost_status,'reconciled');assert.equal(p.actual_cost,0.013);assert.equal(p.connected_seconds,20);assert.equal('duration_seconds'in p,false)});
+test('temporary reconciliation errors stay retryable and are bounded',()=>{let p=buildCostFailurePatch({cost_reconcile_attempts:0},{message:'timeout'});assert.equal(p.cost_status,'pending');p=buildCostFailurePatch({cost_reconcile_attempts:4},{message:'timeout'});assert.equal(p.cost_status,'failed')});
