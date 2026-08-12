@@ -12,7 +12,7 @@ jobs:
         with: {fetch-depth: 0}
       - uses: actions/setup-node@v4
         with: {node-version: 22, cache: npm}
-      - name: Integrate Controlled Test Call into AI Calling admin
+      - name: Finalize Phase 6 source integration
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -26,6 +26,28 @@ jobs:
           s=s.replace("Configure the AI SDR safely. Telephony is not connected yet, so campaign controls configure data only and cannot place calls.", "Configure the AI SDR safely. Phase 6 telephony is controlled-test only; bulk campaign dialing and automatic queue consumption remain disabled.")
           s=s.replace("<Status ok={false}>Telephony not connected</Status>", "<Status ok={false}>Controlled test only</Status>")
           p.write_text(s)
+
+          p=Path('supabase/migrations/20260812040000_ai_voice_phase6_twilio.sql')
+          s=p.read_text()
+          old=""" select count(*),min(r.id) into prospect_count,prospect_id from public.crm_records r
+ where r.type='stats' and coalesce((r.payload->>'deleted')::boolean,false)=false and public.ai_normalize_phone(r.payload->>'phone')=p_phone_e164;
+ if prospect_count=0 then return jsonb_build_object('reserved',false,'reason','stats_prospect_not_found'); end if;
+ if prospect_count>1 then return jsonb_build_object('reserved',false,'reason','ambiguous_stats_prospect_match'); end if;
+ perform 1 from public.crm_records where id=prospect_id for update;"""
+          new=""" select count(*) into prospect_count from public.crm_records r
+ where r.type='stats' and coalesce((r.payload->>'deleted')::boolean,false)=false and public.ai_normalize_phone(r.payload->>'phone')=p_phone_e164;
+ if prospect_count=0 then return jsonb_build_object('reserved',false,'reason','stats_prospect_not_found'); end if;
+ if prospect_count>1 then return jsonb_build_object('reserved',false,'reason','ambiguous_stats_prospect_match'); end if;
+ select r.id into prospect_id from public.crm_records r
+ where r.type='stats' and coalesce((r.payload->>'deleted')::boolean,false)=false and public.ai_normalize_phone(r.payload->>'phone')=p_phone_e164 limit 1;
+ perform 1 from public.crm_records where id=prospect_id for update;"""
+          s=s.replace(old,new)
+          p.write_text(s)
+
+          p=Path('api/ai-controlled-test-call.js')
+          s=p.read_text()
+          s=s.replace("await admin.from('ai_call_events').upsert({attempt_id:attemptId,event_type:'telephony.originated',event_source:'system',provider_slug:'twilio',provider_event_id:`origin:${call.sid}`,payload:{callSid:call.sid,status:call.status||'queued'}},{onConflict:'provider_slug,provider_event_id',ignoreDuplicates:true});", "await admin.from('ai_call_events').insert({attempt_id:attemptId,event_type:'telephony.originated',event_source:'system',provider_slug:'twilio',provider_event_id:`origin:${call.sid}`,payload:{callSid:call.sid,status:call.status||'queued'}});")
+          p.write_text(s)
           PY
       - name: Reconcile package lock
         run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
@@ -34,7 +56,7 @@ jobs:
           if ! git diff --quiet; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add src/AICallingAdmin.jsx package-lock.json
+            git add src/AICallingAdmin.jsx package-lock.json api/ai-controlled-test-call.js supabase/migrations/20260812040000_ai_voice_phase6_twilio.sql
             git commit -m "Finalize Phase 6 admin integration and lockfile"
             git push origin HEAD:phase6-twilio-telephony
           fi
