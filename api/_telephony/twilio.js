@@ -4,7 +4,10 @@ export const TWILIO_PROVIDER='twilio';
 export function twilioConfig(env=process.env){
  const accountSid=env.TWILIO_ACCOUNT_SID||'';const authToken=env.TWILIO_AUTH_TOKEN||'';const fromNumber=env.TWILIO_FROM_NUMBER||'';
  const webhookBase=(env.TWILIO_WEBHOOK_BASE_URL||env.PUBLIC_APP_URL||'').replace(/\/$/,'');
- return {accountSid,authToken,fromNumber,webhookBase,configured:Boolean(accountSid&&authToken&&fromNumber&&webhookBase)};
+ const accountSidValid=/^AC[0-9a-fA-F]{32}$/.test(accountSid);const fromNumberValid=/^\+[1-9][0-9]{7,14}$/.test(fromNumber);const webhookValid=/^https:\/\//i.test(webhookBase);
+ const configured=Boolean(accountSidValid&&authToken&&fromNumberValid&&webhookValid);
+ let configurationError=null;if(!accountSidValid)configurationError='TWILIO_ACCOUNT_SID is missing or invalid.';else if(!authToken)configurationError='TWILIO_AUTH_TOKEN is missing.';else if(!fromNumberValid)configurationError='TWILIO_FROM_NUMBER must be international E.164.';else if(!webhookValid)configurationError='TWILIO_WEBHOOK_BASE_URL must be a public HTTPS origin.';
+ return {accountSid,authToken,fromNumber,webhookBase,accountSidValid,fromNumberValid,webhookValid,configured,configurationError};
 }
 export function classifyTwilioError(e){
  const code=String(e?.code||'TWILIO_ERROR');const status=Number(e?.status||0);let kind='provider_error',internalStatus='provider_rejected';
@@ -24,7 +27,7 @@ export function createTwilioProvider({env=process.env,twilioLib=twilio}={}){
  const cfg=twilioConfig(env);const client=cfg.configured?twilioLib(cfg.accountSid,cfg.authToken):null;
  return {
   slug:TWILIO_PROVIDER,
-  status(){return {provider:'twilio',configured:cfg.configured,fromNumberConfigured:Boolean(cfg.fromNumber),fromNumber:cfg.fromNumber||null,webhookConfigured:Boolean(cfg.webhookBase),readyForTest:cfg.configured,configurationError:cfg.configured?null:'Missing required server-side Twilio configuration.'}},
+  status(){return {provider:'twilio',configured:cfg.configured,fromNumberConfigured:cfg.fromNumberValid,fromNumber:cfg.fromNumberValid?cfg.fromNumber:null,webhookConfigured:cfg.webhookValid,readyForTest:cfg.configured,configurationError:cfg.configurationError}},
   async createCall({to,attemptId}){if(!client)throw Object.assign(new Error('Twilio is not configured.'),{safe:{kind:'missing_configuration',internalStatus:'provider_rejected',code:'MISSING_CONFIGURATION',message:'Twilio is not configured.',status:0}});try{return await client.calls.create({to,from:cfg.fromNumber,twiml:'<Response><Pause length="20"/></Response>',statusCallback:`${cfg.webhookBase}/api/twilio-webhook?attempt=${encodeURIComponent(attemptId)}`,statusCallbackMethod:'POST',statusCallbackEvent:['initiated','ringing','answered','completed'],timeout:20,timeLimit:30});}catch(e){e.safe=classifyTwilioError(e);throw e}},
   async cancelCall(callSid){if(!client)throw Object.assign(new Error('Twilio is not configured.'),{safe:{kind:'missing_configuration'}});try{const current=await client.calls(callSid).fetch();const desired=['queued','ringing'].includes(current.status)?'canceled':'completed';return await client.calls(callSid).update({status:desired});}catch(e){e.safe=classifyTwilioError(e);throw e}},
   async fetchCall(callSid){if(!client)throw Object.assign(new Error('Twilio is not configured.'),{safe:{kind:'missing_configuration'}});try{return await client.calls(callSid).fetch();}catch(e){e.safe=classifyTwilioError(e);throw e}},
