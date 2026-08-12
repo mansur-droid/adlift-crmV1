@@ -57,10 +57,11 @@ begin
  if exists(select 1 from public.ai_call_attempts where controlled_test and created_at > now()-make_interval(secs=>p_rate_limit_seconds)) then
    return jsonb_build_object('reserved',false,'reason','controlled_test_rate_limited');
  end if;
- select count(*),min(r.id) into prospect_count,prospect_id from public.crm_records r
+ select count(*) into prospect_count from public.crm_records r
  where r.type='stats' and coalesce((r.payload->>'deleted')::boolean,false)=false and public.ai_normalize_phone(r.payload->>'phone')=p_phone_e164;
  if prospect_count=0 then return jsonb_build_object('reserved',false,'reason','stats_prospect_not_found'); end if;
  if prospect_count>1 then return jsonb_build_object('reserved',false,'reason','ambiguous_stats_prospect_match'); end if;
+ select r.id into prospect_id from public.crm_records r where r.type='stats' and coalesce((r.payload->>'deleted')::boolean,false)=false and public.ai_normalize_phone(r.payload->>'phone')=p_phone_e164 limit 1;
  perform 1 from public.crm_records where id=prospect_id for update;
  elig:=public.ai_evaluate_call_eligibility(p_campaign_id,prospect_id,now());
  if not coalesce((elig->>'eligible')::boolean,false) then return jsonb_build_object('reserved',false,'reason','phase5_ineligible','eligibility',elig); end if;

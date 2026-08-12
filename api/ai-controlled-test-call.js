@@ -40,7 +40,7 @@ export function createControlledTestHandler({providerFactory=()=>getTelephonyPro
     const call=await provider.createCall({to,attemptId});
     const {error:persistError}=await admin.from('ai_call_attempts').update({provider_call_id:call.sid,provider_status:call.status||'queued',provider_metadata:{...(initiating.provider_metadata||{}),phase:'6',controlled_test:true}}).eq('id',attemptId).eq('lock_token',claim.lock_token);
     if(persistError){await admin.from('ai_call_attempts').update({provider_call_id:call.sid,provider_status:call.status||'queued',failure_code:'PROVIDER_ID_PERSIST_RETRY',failure_reason:'Twilio accepted the call; provider ID persistence required recovery.'}).eq('id',attemptId);}
-    await admin.from('ai_call_events').upsert({attempt_id:attemptId,event_type:'telephony.originated',event_source:'system',provider_slug:'twilio',provider_event_id:`origin:${call.sid}`,payload:{callSid:call.sid,status:call.status||'queued'}},{onConflict:'provider_slug,provider_event_id',ignoreDuplicates:true});
+    await admin.from('ai_call_events').insert({attempt_id:attemptId,event_type:'telephony.originated',event_source:'system',provider_slug:'twilio',provider_event_id:`origin:${call.sid}`,payload:{callSid:call.sid,status:call.status||'queued'}});
     return json(res,201,{attemptId,callSid:call.sid,state:'initiating',providerStatus:call.status||'queued',duplicateRequest:false});
    }catch(e){
     const safe=e.safe||{kind:'provider_error',internalStatus:'provider_rejected',code:'TWILIO_ERROR',message:'Twilio origination failed.'};const ended=now().toISOString();
