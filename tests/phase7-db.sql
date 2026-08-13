@@ -3,6 +3,11 @@
 do $$
 declare c uuid:=gen_random_uuid(); p uuid:=gen_random_uuid(); a uuid; r jsonb; s public.ai_transcript_segments;
 begin
+ insert into ai_provider_configs(provider_kind,provider_slug,display_name,enabled,settings) values
+ ('stt','deepgram','Deepgram STT',true,'{}'),
+ ('llm','openai','OpenAI LLM',true,'{}'),
+ ('tts','deepgram','Deepgram TTS',true,'{}')
+ on conflict(provider_kind,provider_slug) do update set enabled=true;
  insert into ai_call_campaigns(id,name,status,enabled,telephony_provider_slug,stt_provider_slug,llm_provider_slug,tts_provider_slug,timezone_strategy,fixed_timezone,calling_days,calling_window_start,calling_window_end,max_attempts_per_prospect,min_retry_delay_minutes,max_calls_per_day,max_connected_minutes_per_day,max_concurrent_calls)
  values(c,'Phase7 DB','active',true,'twilio','deepgram','openai','deepgram','fixed','Europe/Brussels',array[0,1,2,3,4,5,6],time '00:00',time '23:59',10,0,100,600,1);
  insert into crm_records(id,type,payload) values(p,'stats','{"phone":"+32470000777","status":"dialed"}');
