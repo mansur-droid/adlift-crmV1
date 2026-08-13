@@ -75,7 +75,13 @@ jobs:
       - name: Concurrent controlled reservation race
         run: |
           psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL'
-          update ai_call_attempts set created_at=now()-interval '5 minutes' where controlled_test;
+          update ai_call_attempts
+             set created_at=now()-interval '5 minutes',
+                 status=case when status in ('queued','claimed','initiating','ringing','connected','active_conversation') then 'cancelled' else status end,
+                 ended_at=case when status in ('queued','claimed','initiating','ringing','connected','active_conversation') then now()-interval '4 minutes' else ended_at end,
+                 completed_at=case when status in ('queued','claimed','initiating','ringing','connected','active_conversation') then now()-interval '4 minutes' else completed_at end,
+                 lock_token=null,locked_by=null,locked_at=null,lock_expires_at=null
+           where controlled_test;
           insert into ai_call_campaigns(id,name,status,enabled,telephony_provider_slug,timezone_strategy,fixed_timezone,calling_days,calling_window_start,calling_window_end,max_attempts_per_prospect,min_retry_delay_minutes,max_calls_per_day,max_connected_minutes_per_day,max_concurrent_calls)
           values('66666666-6666-4666-8666-666666666666','Race','active',true,'twilio','fixed','Europe/Brussels',array[0,1,2,3,4,5,6],time '00:00',time '23:59',10,0,100,600,10);
           insert into crm_records(id,type,payload) values
@@ -85,6 +91,7 @@ jobs:
           (psql -h localhost -U postgres -d postgres -Atc "select ai_reserve_controlled_test_attempt('66666666-6666-4666-8666-666666666666','+32475555001','phase6_race_request_0001',60)" >/tmp/race1 2>&1) & P1=$!
           (psql -h localhost -U postgres -d postgres -Atc "select ai_reserve_controlled_test_attempt('66666666-6666-4666-8666-666666666666','+32475555002','phase6_race_request_0002',60)" >/tmp/race2 2>&1) & P2=$!
           wait $P1; wait $P2
+          cat /tmp/race1 /tmp/race2
           COUNT=$(psql -h localhost -U postgres -d postgres -Atc "select count(*) from ai_call_attempts where origin_request_key in ('phase6_race_request_0001','phase6_race_request_0002')")
           test "$COUNT" = "1"
 
