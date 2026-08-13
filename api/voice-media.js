@@ -19,6 +19,9 @@ async function boundAttempt(attemptId,callSid){for(let n=0;n<8;n++){const {data}
 function reject(socket,status='403 Forbidden'){socket.write(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\n`);socket.destroy()}
 function close(ws,code,reason){try{ws.close(code,String(reason).slice(0,120))}catch{try{ws.terminate()}catch{}}}
 
+export async function handleVoiceSocketClose(orchestrator){if(orchestrator&&!orchestrator.closed)await orchestrator.stop('websocket_closed')}
+export async function handleVoiceSocketError(orchestrator,error){if(orchestrator&&!orchestrator.closed)await orchestrator.fail('media',error)}
+
 const server=createServer((req,res)=>{res.statusCode=req.url==='/api/voice-media/health'?200:426;res.setHeader('Content-Type','application/json');res.end(JSON.stringify({ok:req.url==='/api/voice-media/health',phase:7,realtime:true}))});
 const wss=new WebSocketServer({noServer:true,maxPayload:1024*1024,perMessageDeflate:false});
 
@@ -48,8 +51,8 @@ wss.on('connection',ws=>{
    if(!orchestrator)return;if(evt.event==='media')return orchestrator.onMedia(evt);if(evt.event==='mark')return await orchestrator.onMark(evt);if(evt.event==='stop')return await orchestrator.stop('twilio_stream_stop');
   }catch(e){if(orchestrator)await orchestrator.fail('media',e);else close(ws,1011,'startup failed')}
  });
- ws.on('close',async()=>{clearTimeout(timer);if(orchestrator&&!orchestrator.closed)await orchestrator.stop('websocket_closed')});
- ws.on('error',async e=>{clearTimeout(timer);if(orchestrator&&!orchestrator.closed)await orchestrator.fail('media',e)});
+ ws.on('close',async()=>{clearTimeout(timer);await handleVoiceSocketClose(orchestrator)});
+ ws.on('error',async e=>{clearTimeout(timer);await handleVoiceSocketError(orchestrator,e)});
 });
 
 export default server;
