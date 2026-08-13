@@ -106,6 +106,9 @@ begin
  select * into c from public.ai_call_campaigns where id=a.campaign_id;
  if not found or not c.enabled or c.status<>'active' then return jsonb_build_object('reserved',false,'reason','campaign_not_active'); end if;
  if coalesce(c.stt_provider_slug,'')='' or coalesce(c.llm_provider_slug,'')='' or coalesce(c.tts_provider_slug,'')='' then return jsonb_build_object('reserved',false,'reason','voice_provider_missing'); end if;
+ if not exists(select 1 from public.ai_provider_configs where provider_kind='stt' and provider_slug=c.stt_provider_slug and enabled) then return jsonb_build_object('reserved',false,'reason','stt_provider_not_enabled'); end if;
+ if not exists(select 1 from public.ai_provider_configs where provider_kind='llm' and provider_slug=c.llm_provider_slug and enabled) then return jsonb_build_object('reserved',false,'reason','llm_provider_not_enabled'); end if;
+ if not exists(select 1 from public.ai_provider_configs where provider_kind='tts' and provider_slug=c.tts_provider_slug and enabled) then return jsonb_build_object('reserved',false,'reason','tts_provider_not_enabled'); end if;
  select * into existing from public.ai_voice_sessions where attempt_id=p_attempt_id;
  if found then return jsonb_build_object('reserved',true,'duplicate',true,'session_id',existing.id); end if;
  insert into public.ai_voice_sessions(attempt_id,campaign_id,prospect_record_id,status,stt_provider_slug,llm_provider_slug,tts_provider_slug,media_token_hash)
