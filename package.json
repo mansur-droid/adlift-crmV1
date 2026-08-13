@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test:phase6": "node --test tests/phase6-*.test.mjs"
+    "test:phase6": "node --test tests/phase6-*.test.mjs",
+    "test:phase7": "node --test tests/phase7-*.test.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
@@ -16,7 +17,8 @@
     "react-dom": "latest",
     "lucide-react": "latest",
     "@supabase/supabase-js": "latest",
-    "twilio": "latest"
+    "twilio": "latest",
+    "ws": "^8.21.1"
   },
   "devDependencies": {}
 }
