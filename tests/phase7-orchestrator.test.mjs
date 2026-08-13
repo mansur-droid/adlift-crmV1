@@ -3,25 +3,29 @@ import assert from 'node:assert/strict';
 import {VoiceOrchestrator} from '../api/_voice/orchestrator.js';
 
 function harness({allowed=true}={}){
- const rpc=[];const inserts=[];const updates=[];const spoken=[];let clears=0;let transportClears=0;
+ const rpc=[];const inserts=[];const updates=[];const spoken=[];const sentAudio=[];let clears=0;let transportClears=0;
  const admin={rpc:async(name,args)=>{rpc.push({name,args});return {data:{sequence_no:rpc.length-1},error:null}},from:table=>({insert:async row=>{inserts.push({table,row});return {error:null}},update:row=>({eq:async()=>{updates.push({table,row});return {error:null}}})})};
  const stt={slug:'stt-test',close(){},sendAudio(){return true}};
  const llm={slug:'llm-test',async *streamResponse(){yield {delta:'Short response.',firstTokenLatencyMs:12}},async validate(){return {allowed,violations:allowed?[]:['blocked'],unsupportedClaims:[]}}};
  const tts={slug:'tts-test',speak:text=>spoken.push(text),flush(){},clear(){clears++},close(){}};
- const transport={clear(){transportClears++},mark(){return 'mark'},sendAudio(){return true},close(){},acknowledgeMark(){return null}};
+ const transport={clear(){transportClears++},mark(){return 'mark'},sendAudio:(buffer,turnId)=>{sentAudio.push({buffer,turnId});return true},close(){},acknowledgeMark(){return null}};
  const context={regulations:[],knowledge:[],instructions:{objective:[],audience:[],personality:[],opening:[],discovery:[],qualification:[],objection:[],closing:[],transfer:[],appointment:[],guidance:[]},prospect:{},callbacks:[]};
  const providers={stt:()=>stt,llm:()=>llm,tts:()=>tts};
  const session={id:'session',attempt_id:'attempt',stt_provider_slug:'stt-test',llm_provider_slug:'llm-test',tts_provider_slug:'tts-test',turn_no:0,interruption_count:0,latency_metrics:{},provider_errors:[],provider_states:{}};
  const voice=new VoiceOrchestrator({admin,session,context,providers,transport,now:(()=>{let n=1000;return()=>++n})()});
- return {voice,rpc,inserts,updates,spoken,get clears(){return clears},get transportClears(){return transportClears}};
+ return {voice,rpc,inserts,updates,spoken,sentAudio,get clears(){return clears},get transportClears(){return transportClears}};
 }
 
 test('interim speech is not persisted as a final transcript',async()=>{const h=harness();await h.voice.onInterim({text:'partial'});await h.voice.flushPatch();assert.equal(h.rpc.length,0);assert.equal(h.updates.some(x=>x.row.interim_transcript==='partial'),true)});
 
 test('one final prospect turn persists once and produces one agent turn',async()=>{const h=harness();h.voice.pendingFinal='hello';h.voice.pendingFinalStart=10;h.voice.pendingFinalEnd=20;h.voice.pendingConfidence=[0.9];await h.voice.commitProspectTurn('seg-1');assert.equal(h.rpc.filter(x=>x.name==='ai_append_transcript_segment').length,1);assert.equal(h.spoken.length,1);assert.equal(h.voice.turnNo,1)});
 
-test('interruption cancels synthesis and clears queued playback',async()=>{const h=harness();await h.voice.generateAgentTurn('hello');await h.voice.interrupt('test');assert.equal(h.clears,1);assert.equal(h.transportClears,1);assert.equal(h.voice.current,null);assert.equal(h.updates.some(x=>x.row.tts_state==='cancelled'),true)});
+test('duplicate final STT event cannot create a duplicate agent turn',async()=>{const h=harness();const evt={text:'hello',startMs:10,endMs:20,confidence:0.9,speechFinal:true,receivedAtMs:100,lastAudioAtMs:90};await h.voice.onFinal(evt);const turn=h.voice.current?.turnId;await h.voice.onFinal(evt);assert.equal(h.voice.turnNo,1);assert.equal(h.voice.current?.turnId,turn);assert.equal(h.rpc.filter(x=>x.name==='ai_append_transcript_segment'&&x.args.p_speaker==='prospect').length,1);assert.equal(h.voice.session.interruption_count,0)});
+
+test('interruption cancels synthesis and clears queued playback',async()=>{const h=harness();await h.voice.generateAgentTurn('hello');await h.voice.interrupt('test');h.voice.onTtsAudio(Buffer.from([9]));assert.equal(h.clears,1);assert.equal(h.transportClears,1);assert.equal(h.sentAudio.length,0);assert.equal(h.voice.current,null);assert.equal(h.voice.session.tts_state,'cancelled');assert.equal(h.voice.session.interruption_count,1)});
 
 test('rejected generated text is not synthesized',async()=>{const h=harness({allowed:false});await h.voice.generateAgentTurn('question');assert.equal(h.inserts.some(x=>x.row?.event_type==='voice.compliance.blocked'),true);assert.equal(h.spoken.some(x=>x.includes('Short response.')),false)});
 
 test('old generation is invalidated after interruption',async()=>{const h=harness();await h.voice.generateAgentTurn('question');const epoch=h.voice.generationEpoch;await h.voice.interrupt('new speech');assert.ok(h.voice.generationEpoch>epoch);assert.equal(h.voice.current,null)});
+
+test('latency metrics stay isolated by turn',async()=>{const h=harness();await h.voice.onFinal({text:'first',startMs:10,endMs:20,confidence:0.9,speechFinal:true,receivedAtMs:150,lastAudioAtMs:120});const first=h.voice.current.turnId;await h.voice.onFirstAudio({latencyMs:40});assert.equal(h.voice.session.latency_metrics[first].stt_final_ms,30);assert.equal(h.voice.session.latency_metrics[first].llm_first_token_ms,12);assert.equal(h.voice.session.latency_metrics[first].tts_first_audio_ms,40);await h.voice.interrupt('next');await h.voice.onFinal({text:'second',startMs:100,endMs:130,confidence:0.8,speechFinal:true,receivedAtMs:260,lastAudioAtMs:250});const second=h.voice.current.turnId;assert.notEqual(second,first);assert.equal(h.voice.session.latency_metrics[first].stt_final_ms,30);assert.equal(h.voice.session.latency_metrics[second].stt_final_ms,10);assert.equal(h.voice.session.latency_metrics[second].tts_first_audio_ms,undefined)});
