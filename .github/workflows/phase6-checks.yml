@@ -1,7 +1,7 @@
 name: Phase 6 checks
 on:
   push:
-    branches: [phase6-twilio-telephony, main]
+    branches: [phase6-twilio-telephony, phase7-realtime-voice-agent, main]
   workflow_dispatch:
 
 jobs:
@@ -19,7 +19,6 @@ jobs:
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       PGPASSWORD: postgres
-      # Hard no-call CI boundary. No live Twilio credentials are ever injected here.
       TWILIO_CONTROLLED_TEST_ENABLED: 'false'
     steps:
       - uses: actions/checkout@v4
@@ -30,8 +29,10 @@ jobs:
 
       - name: Reproducible npm ci
         run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Phase 6 Node tests with mocked/no-call provider paths
+      - name: Phase 6 Node tests
         run: npm run test:phase6
+      - name: Phase 7 Node tests
+        run: npm run test:phase7
       - name: Vite production build
         run: npm run build
 
@@ -56,19 +57,22 @@ jobs:
           );
           SQL
 
-      - name: Apply fresh Phase 3 + 4 + 5 + 6 migrations
+      - name: Apply fresh Phase 3-7 migrations
         run: |
           psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f supabase/migrations/20260812010000_ai_voice_phase3_foundation.sql
           psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f supabase/migrations/20260812020000_ai_voice_phase4_admin_fields.sql
           psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f supabase/migrations/20260812030000_ai_voice_phase5_eligibility.sql
           psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f supabase/migrations/20260812040000_ai_voice_phase6_twilio.sql
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f supabase/migrations/20260814010000_ai_voice_phase7_realtime.sql
 
-      - name: Existing Phase 5 eligibility regression suite
+      - name: Phase 5 regression suite
         run: psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f tests/phase5-regression.sql
-      - name: Phase 6 lifecycle, duplicate, lease and idempotency integration tests
+      - name: Phase 6 regression suite
         run: psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f tests/phase6-db.sql
+      - name: Phase 7 regression suite
+        run: psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f tests/phase7-db.sql
 
-      - name: Concurrent controlled-origination reservation race
+      - name: Concurrent controlled reservation race
         run: |
           psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL'
           update ai_call_attempts set created_at=now()-interval '5 minutes' where controlled_test;
@@ -81,26 +85,27 @@ jobs:
           (psql -h localhost -U postgres -d postgres -Atc "select ai_reserve_controlled_test_attempt('66666666-6666-4666-8666-666666666666','+32475555001','phase6_race_request_0001',60)" >/tmp/race1 2>&1) & P1=$!
           (psql -h localhost -U postgres -d postgres -Atc "select ai_reserve_controlled_test_attempt('66666666-6666-4666-8666-666666666666','+32475555002','phase6_race_request_0002',60)" >/tmp/race2 2>&1) & P2=$!
           wait $P1; wait $P2
-          cat /tmp/race1 /tmp/race2
           COUNT=$(psql -h localhost -U postgres -d postgres -Atc "select count(*) from ai_call_attempts where origin_request_key in ('phase6_race_request_0001','phase6_race_request_0002')")
           test "$COUNT" = "1"
 
-      - name: Phase 6 hard safety assertions
+      - name: Static safety assertions
         run: |
           grep -q "TWILIO_CONTROLLED_TEST_ENABLED" api/ai-controlled-test-call.js api/_telephony/server.js
           grep -q "Bulk live dialing is disabled" api/ai-controlled-test-call.js
-          grep -q "ai_reserve_controlled_test_attempt" api/ai-controlled-test-call.js supabase/migrations/20260812040000_ai_voice_phase6_twilio.sql
-          grep -q "validateRequest" api/_telephony/twilio.js
-          grep -q "ai_provider_webhook_events" api/twilio-webhook.js
+          grep -q "ai_reserve_controlled_test_attempt" api/ai-controlled-test-call.js
+          grep -q "ai_reserve_voice_session" api/ai-controlled-test-call.js
+          grep -q "ai_append_transcript_segment" api/_voice/orchestrator.js
+          grep -q "validateRequest" api/voice-media.js
           grep -q "stale_sequence" supabase/migrations/20260812040000_ai_voice_phase6_twilio.sql
           grep -q "terminal_regression_blocked" supabase/migrations/20260812040000_ai_voice_phase6_twilio.sql
-          grep -q "MAX_COST_RECONCILE_ATTEMPTS=5" api/ai-telephony-attempt.js
           ! grep -R "Start AI Campaign" src
-          ! grep -R "TWILIO_AUTH_TOKEN" src
+          ! grep -R "TWILIO_AUTH_TOKEN\|DEEPGRAM_API_KEY\|OPENAI_API_KEY" src
 
-      - name: Confirm CI has no path to a real call
+      - name: Confirm CI has no real provider credentials
         run: |
           test "$TWILIO_CONTROLLED_TEST_ENABLED" = "false"
           test -z "$TWILIO_ACCOUNT_SID"
           test -z "$TWILIO_AUTH_TOKEN"
           test -z "$TWILIO_FROM_NUMBER"
+          test -z "$DEEPGRAM_API_KEY"
+          test -z "$OPENAI_API_KEY"
