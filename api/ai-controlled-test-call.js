@@ -1,16 +1,17 @@
 import crypto from 'node:crypto';
 import {getTelephonyProvider} from './_telephony/index.js';
 import {requireAdmin,json,e164,phase6LiveEnabled,uuid} from './_telephony/server.js';
+import {voiceProviderStatus} from './_voice/providers/index.js';
 
 function mediaToken(attemptId,requestKey){return crypto.createHmac('sha256',String(process.env.TWILIO_AUTH_TOKEN||'phase7-disabled')).update(`${attemptId}:${requestKey}`).digest('hex')}
 function tokenHash(token){return crypto.createHash('sha256').update(token).digest('hex')}
 
-export function createControlledTestHandler({providerFactory=()=>getTelephonyProvider('twilio'),requireAdminFn=requireAdmin,liveEnabledFn=phase6LiveEnabled,now=()=>new Date(),randomUUID=()=>crypto.randomUUID()}={}){
+export function createControlledTestHandler({providerFactory=()=>getTelephonyProvider('twilio'),requireAdminFn=requireAdmin,liveEnabledFn=phase6LiveEnabled,now=()=>new Date(),randomUUID=()=>crypto.randomUUID(),voiceStatusFn=voiceProviderStatus}={}){
  return async function handler(req,res){
   res.setHeader?.('Cache-Control','no-store');
   const auth=await requireAdminFn(req,res);if(!auth)return;
-  const {admin,user}=auth;const provider=providerFactory();
-  if(req.method==='GET')return json(res,200,{...provider.status(),controlledTestEnabled:liveEnabledFn(),bulkDialingEnabled:false,autonomousCampaignConsumption:false,phase7:true});
+  const {admin,user}=auth;const provider=providerFactory();const voiceProviders=voiceStatusFn();
+  if(req.method==='GET')return json(res,200,{...provider.status(),voiceProviders,controlledTestEnabled:liveEnabledFn(),bulkDialingEnabled:false,autonomousCampaignConsumption:false,phase7:true});
   if(req.method!=='POST')return json(res,405,{error:'Method not allowed.'});
   let b;try{b=typeof req.body==='string'?JSON.parse(req.body||'{}'):(req.body||{})}catch{return json(res,400,{error:'Invalid JSON body.'})}
   const action=b.action||'place';
@@ -22,6 +23,7 @@ export function createControlledTestHandler({providerFactory=()=>getTelephonyPro
    if(!uuid(b.campaignId))return json(res,400,{error:'A valid Twilio campaignId is required.'});
    const to=e164(b.destination);if(!to)return json(res,400,{error:'Destination must be unambiguous international E.164, for example +32…'});
    const status=provider.status();if(!status.readyForTest)return json(res,503,{error:'Twilio conversational calling is not configured.',configurationError:status.configurationError||null});
+   if(!voiceProviders.deepgram?.configured||!voiceProviders.openai?.configured)return json(res,503,{error:'Conversational AI providers are not configured. No Twilio request was made.',voiceProviders});
    const requestKey=String(b.requestKey||'');if(!/^[A-Za-z0-9_-]{16,100}$/.test(requestKey))return json(res,400,{error:'A stable requestKey is required.'});
 
    const {data:reservation,error:reserveError}=await admin.rpc('ai_reserve_controlled_test_attempt',{p_campaign_id:b.campaignId,p_phone_e164:to,p_request_key:requestKey,p_rate_limit_seconds:60});
