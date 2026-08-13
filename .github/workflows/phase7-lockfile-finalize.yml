@@ -1,0 +1,28 @@
+name: Phase 7 lockfile finalize
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/phase7-lockfile-finalize.yml
+permissions:
+  contents: write
+jobs:
+  finalize:
+    if: github.ref == 'refs/heads/phase7-realtime-voice-agent'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Commit generated lockfile
+        run: |
+          if ! git diff --quiet package-lock.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add package-lock.json
+            git commit -m "Reconcile Phase 7 package lock"
+            git push origin HEAD:phase7-realtime-voice-agent
+          fi
