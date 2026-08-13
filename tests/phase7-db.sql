@@ -36,3 +36,17 @@ begin
  r:=ai_reserve_voice_session(a,repeat('b',64));
  if r->>'reason'<>'voice_provider_missing' then raise exception 'missing providers were accepted: %',r; end if;
 end $$;
+
+do $$
+declare c uuid:=gen_random_uuid(); p uuid:=gen_random_uuid(); a uuid; r jsonb;
+begin
+ update ai_provider_configs set enabled=false where provider_kind='tts' and provider_slug='deepgram';
+ insert into ai_call_campaigns(id,name,status,enabled,telephony_provider_slug,stt_provider_slug,llm_provider_slug,tts_provider_slug,timezone_strategy,fixed_timezone,calling_days,calling_window_start,calling_window_end,max_attempts_per_prospect,min_retry_delay_minutes,max_calls_per_day,max_connected_minutes_per_day,max_concurrent_calls)
+ values(c,'Disabled TTS','active',true,'twilio','deepgram','openai','deepgram','fixed','Europe/Brussels',array[0,1,2,3,4,5,6],time '00:00',time '23:59',10,0,100,600,1);
+ insert into crm_records(id,type,payload) values(p,'stats','{"phone":"+32470000779","status":"dialed"}');
+ insert into ai_call_attempts(campaign_id,prospect_record_id,phone_e164,attempt_number,status,telephony_provider_slug,controlled_test)
+ values(c,p,'+32470000779',1,'queued','twilio',true) returning id into a;
+ r:=ai_reserve_voice_session(a,repeat('c',64));
+ if r->>'reason'<>'tts_provider_not_enabled' then raise exception 'disabled selected TTS provider was accepted: %',r; end if;
+ update ai_provider_configs set enabled=true where provider_kind='tts' and provider_slug='deepgram';
+end $$;
