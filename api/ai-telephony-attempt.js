@@ -19,7 +19,14 @@ export default async function handler(req,res){
  let b={};if(req.method==='POST'){try{b=typeof req.body==='string'?JSON.parse(req.body||'{}'):(req.body||{})}catch{return json(res,400,{error:'Invalid JSON body.'})}}
  const id=b.attemptId||req.query?.attemptId;if(!uuid(id))return json(res,400,{error:'Valid attemptId required'});
  const {data:a}=await admin.from('ai_call_attempts').select('*').eq('id',id).eq('controlled_test',true).maybeSingle();if(!a)return json(res,404,{error:'Controlled attempt not found.'});
- if(req.method==='GET'){const {data:events}=await admin.from('ai_call_events').select('*').eq('attempt_id',id).order('occurred_at');return json(res,200,{attempt:a,events:events||[]})}
+ if(req.method==='GET'){
+  const [{data:events},{data:voiceSession},{data:transcript}]=await Promise.all([
+   admin.from('ai_call_events').select('*').eq('attempt_id',id).order('occurred_at'),
+   admin.from('ai_voice_sessions').select('id,attempt_id,provider_call_id,stream_sid,status,stt_provider_slug,llm_provider_slug,tts_provider_slug,turn_no,current_turn_id,interim_transcript,last_prospect_utterance,last_agent_response,tts_state,interruption_count,latency_metrics,provider_states,provider_errors,compliance_state,connected_at,last_activity_at,ended_at,expires_at').eq('attempt_id',id).maybeSingle(),
+   admin.from('ai_transcript_segments').select('id,sequence_no,speaker,start_ms,end_ms,text,is_final,confidence,provider_slug,metadata,created_at').eq('attempt_id',id).eq('is_final',true).order('sequence_no')
+  ]);
+  return json(res,200,{attempt:a,events:events||[],voiceSession:voiceSession||null,transcript:transcript||[]});
+ }
  if(req.method==='POST'&&b.action==='reconcileCost'){
   if(a.cost_status==='reconciled')return json(res,200,{attempt:a,alreadyReconciled:true});
   if(!a.provider_call_id)return json(res,409,{error:'Provider Call SID not available.'});
