@@ -1,28 +1,32 @@
-name: Phase 7 lockfile finalize
+name: Phase 7 checks
 on:
   workflow_dispatch:
   push:
-    paths:
-      - .github/workflows/phase7-lockfile-finalize.yml
-permissions:
-  contents: write
+    branches: [phase7-realtime-voice-agent, main]
 jobs:
-  finalize:
-    if: github.ref == 'refs/heads/phase7-realtime-voice-agent'
+  phase7:
     runs-on: ubuntu-latest
+    env:
+      TWILIO_CONTROLLED_TEST_ENABLED: 'false'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
-      - name: Commit generated lockfile
+      - name: Reproducible install
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Phase 6 regression tests
+        run: npm run test:phase6
+      - name: Phase 7 regression tests
+        run: npm run test:phase7
+      - name: Production build
+        run: npm run build
+      - name: Confirm no provider credentials in CI
         run: |
-          if ! git diff --quiet package-lock.json; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add package-lock.json
-            git commit -m "Reconcile Phase 7 package lock"
-            git push origin HEAD:phase7-realtime-voice-agent
-          fi
+          test "$TWILIO_CONTROLLED_TEST_ENABLED" = "false"
+          test -z "$TWILIO_ACCOUNT_SID"
+          test -z "$TWILIO_AUTH_TOKEN"
+          test -z "$TWILIO_FROM_NUMBER"
+          test -z "$DEEPGRAM_API_KEY"
+          test -z "$OPENAI_API_KEY"
