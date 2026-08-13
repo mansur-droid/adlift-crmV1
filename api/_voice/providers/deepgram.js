@@ -34,8 +34,10 @@ export function createDeepgramSTT({apiKey=process.env.DEEPGRAM_API_KEY,settings=
 }
 
 export function createDeepgramTTS({apiKey=process.env.DEEPGRAM_API_KEY,settings={},WebSocketImpl=WebSocket,now=()=>Date.now()}={}){
- const model=settings.model||'aura-2-thalia-en';const speed=Number(settings.speed||1);let ws=null;let opened=false;let closed=false;let handlers={};let firstAudioPending=false;let requestStartedAt=0;let openTimer=null;
+ const model=settings.model||'aura-2-thalia-en';const speed=Number(settings.speed||1);let ws=null;let opened=false;let closed=false;let handlers={};let firstAudioPending=false;let requestStartedAt=0;let openTimer=null;let firstAudioTimer=null;
  const url=new URL('wss://api.deepgram.com/v1/speak');url.searchParams.set('model',model);url.searchParams.set('encoding','mulaw');url.searchParams.set('sample_rate','8000');if(Number.isFinite(speed)&&speed>=0.7&&speed<=1.5)url.searchParams.set('speed',String(speed));
+ const clearFirstAudioTimer=()=>{clearTimeout(firstAudioTimer);firstAudioTimer=null};
+ const armFirstAudioTimer=()=>{clearFirstAudioTimer();firstAudioTimer=setTimeout(()=>{if(!firstAudioPending||closed)return;firstAudioPending=false;const e=Object.assign(new Error('Deepgram TTS first-audio timeout.'),{code:'TTS_TIMEOUT'});handlers.onError?.(e)},timeoutMs(settings,'first_audio_timeout_ms',5000))};
  return {
   slug:'deepgram',kind:'tts',status(){return {configured:Boolean(apiKey),model,encoding:'mulaw',sampleRate:8000}},
   connect(nextHandlers={}){handlers=nextHandlers;return new Promise((resolve,reject)=>{
@@ -43,14 +45,14 @@ export function createDeepgramTTS({apiKey=process.env.DEEPGRAM_API_KEY,settings=
    ws=new WebSocketImpl(url.toString(),{headers:{Authorization:`Token ${apiKey}`}});
    openTimer=setTimeout(()=>{try{ws.terminate?.()}catch{};reject(Object.assign(new Error('Deepgram TTS connection timeout.'),{code:'TTS_TIMEOUT'}))},timeoutMs(settings,'connect_timeout_ms',8000));
    ws.on('open',()=>{opened=true;clearTimeout(openTimer);handlers.onState?.('connected');resolve()});
-   ws.on('message',(raw,isBinary)=>{if(isBinary||Buffer.isBuffer(raw)){if(firstAudioPending){firstAudioPending=false;handlers.onFirstAudio?.({latencyMs:Math.max(0,now()-requestStartedAt)})}handlers.onAudio?.(Buffer.from(raw));return}const msg=safeJson(raw);if(!msg)return;if(msg.type==='Flushed')handlers.onFlushed?.(msg);if(msg.type==='Cleared')handlers.onCleared?.(msg);if(msg.type==='Warning')handlers.onWarning?.(msg)});
+   ws.on('message',(raw,isBinary)=>{if(isBinary||Buffer.isBuffer(raw)){if(firstAudioPending){firstAudioPending=false;clearFirstAudioTimer();handlers.onFirstAudio?.({latencyMs:Math.max(0,now()-requestStartedAt)})}handlers.onAudio?.(Buffer.from(raw));return}const msg=safeJson(raw);if(!msg)return;if(msg.type==='Flushed')handlers.onFlushed?.(msg);if(msg.type==='Cleared')handlers.onCleared?.(msg);if(msg.type==='Warning')handlers.onWarning?.(msg)});
    ws.on('error',e=>{handlers.onError?.(Object.assign(e,{code:e.code||'TTS_ERROR'}));if(!opened){clearTimeout(openTimer);reject(e)}});
-   ws.on('close',(code,reason)=>{closed=true;handlers.onState?.('closed');handlers.onClose?.({code,reason:String(reason||'')})});
+   ws.on('close',(code,reason)=>{closed=true;clearFirstAudioTimer();handlers.onState?.('closed');handlers.onClose?.({code,reason:String(reason||'')})});
   })},
-  speak(text){if(!opened||closed||!String(text||'').trim())return false;if(!firstAudioPending){firstAudioPending=true;requestStartedAt=now()}ws.send(JSON.stringify({type:'Speak',text:String(text)}));return true},
+  speak(text){if(!opened||closed||!String(text||'').trim())return false;if(!firstAudioPending){firstAudioPending=true;requestStartedAt=now();armFirstAudioTimer()}ws.send(JSON.stringify({type:'Speak',text:String(text)}));return true},
   flush(){if(opened&&!closed)ws.send(JSON.stringify({type:'Flush'}))},
-  clear(){if(opened&&!closed){firstAudioPending=false;ws.send(JSON.stringify({type:'Clear'}));handlers.onState?.('clearing')}},
-  close(){closed=true;clearTimeout(openTimer);if(opened&&ws?.readyState===WebSocketImpl.OPEN){try{ws.send(JSON.stringify({type:'Close'}))}catch{};setTimeout(()=>{try{ws.close()}catch{}},20)}else try{ws?.close?.()}catch{}},
+  clear(){if(opened&&!closed){firstAudioPending=false;clearFirstAudioTimer();ws.send(JSON.stringify({type:'Clear'}));handlers.onState?.('clearing')}},
+  close(){closed=true;clearTimeout(openTimer);clearFirstAudioTimer();if(opened&&ws?.readyState===WebSocketImpl.OPEN){try{ws.send(JSON.stringify({type:'Close'}))}catch{};setTimeout(()=>{try{ws.close()}catch{}},20)}else try{ws?.close?.()}catch{}},
   get ready(){return opened&&!closed}
  };
 }
