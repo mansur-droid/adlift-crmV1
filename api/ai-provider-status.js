@@ -6,6 +6,7 @@ const anonKey=process.env.VITE_SUPABASE_ANON_KEY||process.env.SUPABASE_ANON_KEY;
 const secretChecks={
  twilio:['TWILIO_ACCOUNT_SID','TWILIO_AUTH_TOKEN'],
  openai:['OPENAI_API_KEY'],
+ groq:['GROQ_API_KEY'],
  anthropic:['ANTHROPIC_API_KEY'],
  gemini:['GEMINI_API_KEY'],
  google:['GOOGLE_API_KEY'],
