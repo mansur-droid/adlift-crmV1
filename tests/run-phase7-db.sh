@@ -38,3 +38,4 @@ done
 "${PSQL[@]}" -f tests/phase5-regression.sql
 "${PSQL[@]}" -f tests/phase6-db.sql
 "${PSQL[@]}" -f tests/phase7-db.sql
+"${PSQL[@]}" -f tests/phase7-controlled-debug-db.sql
