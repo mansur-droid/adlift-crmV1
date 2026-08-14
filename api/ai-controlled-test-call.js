@@ -5,6 +5,7 @@ import {voiceProviderStatus} from './_voice/providers/index.js';
 
 function mediaToken(attemptId,requestKey){return crypto.createHmac('sha256',String(process.env.TWILIO_AUTH_TOKEN||'phase7-disabled')).update(`${attemptId}:${requestKey}`).digest('hex')}
 function tokenHash(token){return crypto.createHash('sha256').update(token).digest('hex')}
+function reservationReason(reservation){return reservation?.reason==='phase5_ineligible'?(reservation?.eligibility?.reason_code||'phase5_ineligible'):(reservation?.reason||'reservation_rejected')}
 
 export function createControlledTestHandler({providerFactory=()=>getTelephonyProvider('twilio'),requireAdminFn=requireAdmin,liveEnabledFn=phase6LiveEnabled,now=()=>new Date(),randomUUID=()=>crypto.randomUUID(),voiceStatusFn=voiceProviderStatus}={}){
  return async function handler(req,res){
@@ -17,6 +18,14 @@ export function createControlledTestHandler({providerFactory=()=>getTelephonyPro
   const action=b.action||'place';
   if(action==='bulk'||b.bulk===true)return json(res,403,{error:'Bulk live dialing is disabled.'});
 
+  if(action==='diagnose'){
+   if(!uuid(b.campaignId))return json(res,400,{error:'A valid Twilio campaignId is required.'});
+   const to=e164(b.destination);if(!to)return json(res,400,{error:'Destination must be unambiguous international E.164, for example +32…'});
+   const {data,error}=await admin.rpc('ai_controlled_test_diagnostics',{p_campaign_id:b.campaignId,p_phone_e164:to,p_at:now().toISOString()});
+   if(error)return json(res,409,{error:'Eligibility diagnostics unavailable.',reason:error.message});
+   return json(res,200,{diagnostics:data});
+  }
+
   if(action==='place'){
    if(!liveEnabledFn())return json(res,423,{error:'Controlled real calling is server-disabled. TWILIO_CONTROLLED_TEST_ENABLED must remain false until one authorized test.'});
    if(b.confirmation!=='PLACE ONE REAL TWILIO CALL')return json(res,400,{error:'Explicit real-call confirmation is required.'});
@@ -28,7 +37,7 @@ export function createControlledTestHandler({providerFactory=()=>getTelephonyPro
 
    const {data:reservation,error:reserveError}=await admin.rpc('ai_reserve_controlled_test_attempt',{p_campaign_id:b.campaignId,p_phone_e164:to,p_request_key:requestKey,p_rate_limit_seconds:60});
    if(reserveError)return json(res,409,{error:'Controlled test attempt could not be reserved.',reason:reserveError.message});
-   if(!reservation?.reserved){const code=reservation?.reason==='controlled_test_rate_limited'?429:409;return json(res,code,{error:'Controlled test reservation rejected.',reason:reservation?.reason||'reservation_rejected',eligibility:reservation?.eligibility||null});}
+   if(!reservation?.reserved){const reason=reservationReason(reservation);const code=reservation?.reason==='controlled_test_rate_limited'?429:409;return json(res,code,{error:'Controlled test reservation rejected.',reason,reasonSource:reservation?.reason||null,eligibility:reservation?.eligibility||null});}
    const attemptId=reservation.attempt_id;
    const {data:reservedAttempt}=await admin.from('ai_call_attempts').select('*').eq('id',attemptId).eq('controlled_test',true).maybeSingle();
    if(!reservedAttempt)return json(res,409,{error:'Reserved controlled attempt is unavailable.'});

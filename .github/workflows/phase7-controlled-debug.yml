@@ -1,0 +1,77 @@
+name: Phase 7 controlled debug
+on:
+  workflow_dispatch:
+  push:
+    branches: [phase7-controlled-test-debug]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGPASSWORD: postgres
+      TWILIO_CONTROLLED_TEST_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Reproducible npm ci
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Phase 6 Node tests
+        run: npm run test:phase6
+      - name: Phase 7 Node tests
+        run: npm run test:phase7
+      - name: Vite production build
+        run: npm run build
+      - name: Fresh Phase 3-7 database and SQL regressions
+        run: bash tests/run-phase7-db.sh
+      - name: Concurrent controlled reservation race
+        run: |
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL'
+          update ai_call_attempts
+             set created_at=now()-interval '5 minutes',
+                 status=case when status in ('queued','claimed','initiating','ringing','connected','active_conversation') then 'cancelled' else status end,
+                 ended_at=case when status in ('queued','claimed','initiating','ringing','connected','active_conversation') then now()-interval '4 minutes' else ended_at end,
+                 completed_at=case when status in ('queued','claimed','initiating','ringing','connected','active_conversation') then now()-interval '4 minutes' else completed_at end,
+                 lock_token=null,locked_by=null,locked_at=null,lock_expires_at=null
+           where controlled_test;
+          insert into ai_call_campaigns(id,name,status,enabled,telephony_provider_slug,timezone_strategy,fixed_timezone,calling_days,calling_window_start,calling_window_end,max_attempts_per_prospect,min_retry_delay_minutes,max_calls_per_day,max_connected_minutes_per_day,max_concurrent_calls)
+          values('77777777-7777-4777-8777-777777777777','Debug Race','active',true,'twilio','fixed','Europe/Brussels',array[0,1,2,3,4,5,6],time '00:00',time '23:59',10,0,100,600,10);
+          insert into crm_records(id,type,payload) values
+          ('77777777-7777-4777-8777-777777777771','stats','{"phone":"+32475555101","status":"dialed"}'),
+          ('77777777-7777-4777-8777-777777777772','stats','{"phone":"+32475555102","status":"dialed"}');
+          SQL
+          (psql -h localhost -U postgres -d postgres -Atc "select ai_reserve_controlled_test_attempt('77777777-7777-4777-8777-777777777777','+32475555101','phase7_debug_race_0001',60)" >/tmp/race1 2>&1) & P1=$!
+          (psql -h localhost -U postgres -d postgres -Atc "select ai_reserve_controlled_test_attempt('77777777-7777-4777-8777-777777777777','+32475555102','phase7_debug_race_0002',60)" >/tmp/race2 2>&1) & P2=$!
+          wait $P1; wait $P2
+          cat /tmp/race1 /tmp/race2
+          COUNT=$(psql -h localhost -U postgres -d postgres -Atc "select count(*) from ai_call_attempts where origin_request_key in ('phase7_debug_race_0001','phase7_debug_race_0002')")
+          test "$COUNT" = "1"
+      - name: Static controlled-test safety assertions
+        run: |
+          grep -q "TWILIO_CONTROLLED_TEST_ENABLED" api/ai-controlled-test-call.js api/_telephony/server.js
+          grep -q "Bulk live dialing is disabled" api/ai-controlled-test-call.js
+          grep -q "ai_reserve_controlled_test_attempt" api/ai-controlled-test-call.js
+          grep -q "ai_reserve_voice_session" api/ai-controlled-test-call.js
+          grep -q "ai_controlled_test_diagnostics" api/ai-controlled-test-call.js
+          ! grep -R "Start AI Campaign" src
+          ! grep -R "TWILIO_AUTH_TOKEN\|DEEPGRAM_API_KEY\|OPENAI_API_KEY" src
+      - name: Confirm no live provider credentials in CI
+        run: |
+          test "$TWILIO_CONTROLLED_TEST_ENABLED" = "false"
+          test -z "$TWILIO_ACCOUNT_SID"
+          test -z "$TWILIO_AUTH_TOKEN"
+          test -z "$TWILIO_FROM_NUMBER"
+          test -z "$DEEPGRAM_API_KEY"
+          test -z "$OPENAI_API_KEY"
