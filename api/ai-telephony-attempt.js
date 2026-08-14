@@ -22,7 +22,7 @@ export default async function handler(req,res){
  if(req.method==='GET'){
   const [{data:events},{data:voiceSession},{data:transcript}]=await Promise.all([
    admin.from('ai_call_events').select('*').eq('attempt_id',id).order('occurred_at'),
-   admin.from('ai_voice_sessions').select('id,attempt_id,provider_call_id,stream_sid,status,stt_provider_slug,llm_provider_slug,tts_provider_slug,turn_no,current_turn_id,interim_transcript,last_prospect_utterance,last_agent_response,tts_state,interruption_count,latency_metrics,provider_states,provider_errors,compliance_state,connected_at,last_activity_at,ended_at,expires_at').eq('attempt_id',id).maybeSingle(),
+   admin.from('ai_voice_sessions').select('id,attempt_id,provider_call_id,stream_sid,status,stt_provider_slug,llm_provider_slug,tts_provider_slug,turn_no,current_turn_id,interim_transcript,last_prospect_utterance,last_agent_response,tts_state,interruption_count,latency_metrics,provider_states,provider_errors,compliance_state,objection_state,connected_at,last_activity_at,ended_at,expires_at').eq('attempt_id',id).maybeSingle(),
    admin.from('ai_transcript_segments').select('id,sequence_no,speaker,start_ms,end_ms,text,is_final,confidence,provider_slug,metadata,created_at').eq('attempt_id',id).eq('is_final',true).order('sequence_no')
   ]);
   return json(res,200,{attempt:a,events:events||[],voiceSession:voiceSession||null,transcript:transcript||[]});
