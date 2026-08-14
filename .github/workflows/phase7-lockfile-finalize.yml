@@ -2,7 +2,7 @@ name: Phase 7 checks
 on:
   workflow_dispatch:
   push:
-    branches: [phase7-realtime-voice-agent, phase7-controlled-test-debug, main]
+    branches: [phase7-realtime-voice-agent, phase7-controlled-test-debug, phase7-groq-llm, main]
 jobs:
   phase7:
     runs-on: ubuntu-latest
@@ -30,3 +30,4 @@ jobs:
           test -z "$TWILIO_FROM_NUMBER"
           test -z "$DEEPGRAM_API_KEY"
           test -z "$OPENAI_API_KEY"
+          test -z "$GROQ_API_KEY"
