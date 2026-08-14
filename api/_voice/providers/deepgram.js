@@ -8,7 +8,7 @@ function endpointingMs(settings){const n=Number(settings?.endpointing_ms??250);r
 export function createDeepgramSTT({apiKey=process.env.DEEPGRAM_API_KEY,settings={},WebSocketImpl=WebSocket,now=()=>Date.now(),setIntervalFn=setInterval,clearIntervalFn=clearInterval}={}){
  const model=settings.model||'nova-3';const language=settings.language||'en-US';const endpointing=endpointingMs(settings);const utteranceEnd=utteranceEndMs(settings);
  const maxBufferedBytes=Math.max(8000,Math.min(128000,Number(settings.startup_buffer_bytes||64000)));const keepaliveMs=Math.max(3000,Math.min(5000,Number(settings.keepalive_ms||4000)));
- let ws=null;let opened=false;let closed=false;let lastAudioAt=0;let handlers={};let openTimer=null;let keepaliveTimer=null;let buffered=[];let bufferedBytes=0;let hadError=false;
+ let ws=null;let opened=false;let closed=false;let lastAudioAt=0;let streamOpenedAt=0;let handlers={};let openTimer=null;let keepaliveTimer=null;let buffered=[];let bufferedBytes=0;let hadError=false;
  const url=new URL('wss://api.deepgram.com/v1/listen');
  for(const [k,v] of Object.entries({model,language,encoding:'mulaw',sample_rate:'8000',channels:'1',interim_results:'true',smart_format:'true',vad_events:'true',endpointing:String(endpointing),utterance_end_ms:String(utteranceEnd)}))url.searchParams.set(k,v);
  const stopKeepalive=()=>{if(keepaliveTimer){clearIntervalFn(keepaliveTimer);keepaliveTimer=null}};
@@ -21,13 +21,14 @@ export function createDeepgramSTT({apiKey=process.env.DEEPGRAM_API_KEY,settings=
    if(!apiKey)return reject(Object.assign(new Error('Deepgram STT API key missing.'),{code:'STT_CONFIG'}));
    ws=new WebSocketImpl(url.toString(),{headers:{Authorization:`Token ${apiKey}`}});
    openTimer=setTimeout(()=>{hadError=true;try{ws.terminate?.()}catch{};reject(Object.assign(new Error('Deepgram STT connection timeout.'),{code:'STT_TIMEOUT'}))},timeoutMs(settings,'connect_timeout_ms',8000));
-   ws.on('open',()=>{opened=true;clearTimeout(openTimer);flushBuffered();startKeepalive();handlers.onState?.('connected');resolve()});
+   ws.on('open',()=>{opened=true;streamOpenedAt=now();clearTimeout(openTimer);flushBuffered();startKeepalive();handlers.onState?.('connected');resolve()});
    ws.on('message',raw=>{const msg=safeJson(raw);if(!msg)return;
     if(msg.type==='SpeechStarted'){handlers.onSpeechStarted?.({atMs:now(),providerTimestampMs:Math.max(0,Math.round(Number(msg.timestamp||0)*1000)),provider:msg});return}
     if(msg.type==='UtteranceEnd'){handlers.onUtteranceEnd?.({atMs:now(),provider:msg});return}
     if(msg.type!=='Results')return;
     const alt=msg.channel?.alternatives?.[0];const text=String(alt?.transcript||'').trim();if(!text)return;
-    const evt={text,confidence:Number.isFinite(alt?.confidence)?alt.confidence:null,isFinal:Boolean(msg.is_final),speechFinal:Boolean(msg.speech_final),providerSegmentId:msg.metadata?.request_id||null,startMs:Math.max(0,Math.round(Number(msg.start||0)*1000)),endMs:Math.max(0,Math.round((Number(msg.start||0)+Number(msg.duration||0))*1000)),receivedAtMs:now(),lastAudioAtMs:lastAudioAt,provider:msg};
+    const startMs=Math.max(0,Math.round(Number(msg.start||0)*1000));const endMs=Math.max(0,Math.round((Number(msg.start||0)+Number(msg.duration||0))*1000));const receivedAtMs=now();
+    const evt={text,confidence:Number.isFinite(alt?.confidence)?alt.confidence:null,isFinal:Boolean(msg.is_final),speechFinal:Boolean(msg.speech_final),providerSegmentId:msg.metadata?.request_id||null,startMs,endMs,receivedAtMs,speechEndAtMs:streamOpenedAt?streamOpenedAt+endMs:null,lastAudioAtMs:lastAudioAt,provider:msg};
     if(evt.isFinal)handlers.onFinal?.(evt);else handlers.onInterim?.(evt);
    });
    ws.on('error',e=>{hadError=true;const err=Object.assign(e,{code:e.code||'STT_ERROR'});handlers.onError?.(err);if(!opened){clearTimeout(openTimer);reject(err)}});
