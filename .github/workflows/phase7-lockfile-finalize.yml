@@ -2,7 +2,7 @@ name: Phase 7 checks
 on:
   workflow_dispatch:
   push:
-    branches: [phase7-realtime-voice-agent, phase7-controlled-test-debug, phase7-groq-llm, phase7-human-caller-hardening, phase7-latency-rate-playback-hardening, main]
+    branches: [phase7-realtime-voice-agent, phase7-controlled-test-debug, phase7-groq-llm, phase7-human-caller-hardening, phase7-latency-rate-playback-hardening, phase7-groq-400-latency-fix, main]
 jobs:
   phase7:
     runs-on: ubuntu-latest
