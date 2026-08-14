@@ -3,9 +3,10 @@ import WebSocket from 'ws';
 function timeoutMs(settings,key,fallback){const n=Number(settings?.[key]);return Number.isFinite(n)&&n>=100&&n<=60000?n:fallback}
 function safeJson(data){try{return JSON.parse(String(data))}catch{return null}}
 function utteranceEndMs(settings){const n=Number(settings?.utterance_end_ms??1000);return Number.isFinite(n)&&n>=1000&&n<=5000?Math.round(n):1000}
+function endpointingMs(settings){const n=Number(settings?.endpointing_ms??250);return Number.isFinite(n)&&n>=100&&n<=2000?Math.round(n):250}
 
 export function createDeepgramSTT({apiKey=process.env.DEEPGRAM_API_KEY,settings={},WebSocketImpl=WebSocket,now=()=>Date.now(),setIntervalFn=setInterval,clearIntervalFn=clearInterval}={}){
- const model=settings.model||'nova-3';const language=settings.language||'en';const endpointing=Number(settings.endpointing_ms||300);const utteranceEnd=utteranceEndMs(settings);
+ const model=settings.model||'nova-3';const language=settings.language||'en-US';const endpointing=endpointingMs(settings);const utteranceEnd=utteranceEndMs(settings);
  const maxBufferedBytes=Math.max(8000,Math.min(128000,Number(settings.startup_buffer_bytes||64000)));const keepaliveMs=Math.max(3000,Math.min(5000,Number(settings.keepalive_ms||4000)));
  let ws=null;let opened=false;let closed=false;let lastAudioAt=0;let handlers={};let openTimer=null;let keepaliveTimer=null;let buffered=[];let bufferedBytes=0;let hadError=false;
  const url=new URL('wss://api.deepgram.com/v1/listen');
@@ -15,14 +16,14 @@ export function createDeepgramSTT({apiKey=process.env.DEEPGRAM_API_KEY,settings=
  const flushBuffered=()=>{if(!opened||closed||ws?.readyState!==WebSocketImpl.OPEN)return;for(const chunk of buffered)ws.send(chunk);buffered=[];bufferedBytes=0};
  const bufferAudio=buffer=>{const copy=Buffer.from(buffer);buffered.push(copy);bufferedBytes+=copy.length;while(bufferedBytes>maxBufferedBytes&&buffered.length){const removed=buffered.shift();bufferedBytes-=removed.length}};
  return {
-  slug:'deepgram',kind:'stt',status(){return {configured:Boolean(apiKey),model,encoding:'mulaw',sampleRate:8000}},
+  slug:'deepgram',kind:'stt',status(){return {configured:Boolean(apiKey),model,language,endpointingMs:endpointing,utteranceEndMs:utteranceEnd,encoding:'mulaw',sampleRate:8000}},
   connect(nextHandlers={}){handlers=nextHandlers;return new Promise((resolve,reject)=>{
    if(!apiKey)return reject(Object.assign(new Error('Deepgram STT API key missing.'),{code:'STT_CONFIG'}));
    ws=new WebSocketImpl(url.toString(),{headers:{Authorization:`Token ${apiKey}`}});
    openTimer=setTimeout(()=>{hadError=true;try{ws.terminate?.()}catch{};reject(Object.assign(new Error('Deepgram STT connection timeout.'),{code:'STT_TIMEOUT'}))},timeoutMs(settings,'connect_timeout_ms',8000));
    ws.on('open',()=>{opened=true;clearTimeout(openTimer);flushBuffered();startKeepalive();handlers.onState?.('connected');resolve()});
    ws.on('message',raw=>{const msg=safeJson(raw);if(!msg)return;
-    if(msg.type==='SpeechStarted'){handlers.onSpeechStarted?.({atMs:now(),provider:msg});return}
+    if(msg.type==='SpeechStarted'){handlers.onSpeechStarted?.({atMs:now(),providerTimestampMs:Math.max(0,Math.round(Number(msg.timestamp||0)*1000)),provider:msg});return}
     if(msg.type==='UtteranceEnd'){handlers.onUtteranceEnd?.({atMs:now(),provider:msg});return}
     if(msg.type!=='Results')return;
     const alt=msg.channel?.alternatives?.[0];const text=String(alt?.transcript||'').trim();if(!text)return;
@@ -40,12 +41,12 @@ export function createDeepgramSTT({apiKey=process.env.DEEPGRAM_API_KEY,settings=
 }
 
 export function createDeepgramTTS({apiKey=process.env.DEEPGRAM_API_KEY,settings={},WebSocketImpl=WebSocket,now=()=>Date.now()}={}){
- const model=settings.model||'aura-2-thalia-en';const speed=Number(settings.speed||1);let ws=null;let opened=false;let closed=false;let handlers={};let firstAudioPending=false;let requestStartedAt=0;let openTimer=null;let firstAudioTimer=null;
+ const model=settings.voice||settings.model||'aura-2-apollo-en';const speed=Number(settings.speed??1);let ws=null;let opened=false;let closed=false;let handlers={};let firstAudioPending=false;let requestStartedAt=0;let openTimer=null;let firstAudioTimer=null;
  const url=new URL('wss://api.deepgram.com/v1/speak');url.searchParams.set('model',model);url.searchParams.set('encoding','mulaw');url.searchParams.set('sample_rate','8000');if(Number.isFinite(speed)&&speed>=0.7&&speed<=1.5)url.searchParams.set('speed',String(speed));
  const clearFirstAudioTimer=()=>{clearTimeout(firstAudioTimer);firstAudioTimer=null};
  const armFirstAudioTimer=()=>{clearFirstAudioTimer();firstAudioTimer=setTimeout(()=>{if(!firstAudioPending||closed)return;firstAudioPending=false;const e=Object.assign(new Error('Deepgram TTS first-audio timeout.'),{code:'TTS_TIMEOUT'});handlers.onError?.(e)},timeoutMs(settings,'first_audio_timeout_ms',5000))};
  return {
-  slug:'deepgram',kind:'tts',status(){return {configured:Boolean(apiKey),model,encoding:'mulaw',sampleRate:8000}},
+  slug:'deepgram',kind:'tts',status(){return {configured:Boolean(apiKey),model,voice:model,speed,encoding:'mulaw',sampleRate:8000}},
   connect(nextHandlers={}){handlers=nextHandlers;return new Promise((resolve,reject)=>{
    if(!apiKey)return reject(Object.assign(new Error('Deepgram TTS API key missing.'),{code:'TTS_CONFIG'}));
    ws=new WebSocketImpl(url.toString(),{headers:{Authorization:`Token ${apiKey}`}});
