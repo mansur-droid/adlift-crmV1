@@ -15,7 +15,15 @@ test('admin is accepted server-side',async()=>{const r=res();const out=await req
 test('actual dialing accepts only explicit international E.164',()=>{assert.equal(e164('+32470000001'),'+32470000001');assert.equal(e164('0470000001'),null);assert.equal(e164('0032470000001'),null)});
 
 const noCallProvider={status:()=>({configured:true,readyForTest:true,fromNumber:'+15005550006'}),createCall:async()=>{throw new Error('createCall must not be reached')},cancelCall:async()=>{throw new Error('cancelCall must not be reached')}};
-function preflightAdmin({llm='openai'}={}){const campaign={id:'11111111-1111-4111-8111-111111111111',stt_provider_slug:'deepgram',llm_provider_slug:llm,tts_provider_slug:'deepgram'};const configs=[{provider_kind:'stt',provider_slug:'deepgram',enabled:true},{provider_kind:'llm',provider_slug:llm,enabled:true},{provider_kind:'tts',provider_slug:'deepgram',enabled:true}];return {from(table){if(table==='ai_call_campaigns')return {select(){return {eq(){return {single:async()=>({data:campaign,error:null})}}}}};if(table==='ai_provider_configs')return {select(){return {eq:async()=>({data:configs,error:null})}};throw new Error(`unexpected table ${table}`)}}}
+function preflightAdmin({llm='openai'}={}){
+ const campaign={id:'11111111-1111-4111-8111-111111111111',stt_provider_slug:'deepgram',llm_provider_slug:llm,tts_provider_slug:'deepgram'};
+ const configs=[{provider_kind:'stt',provider_slug:'deepgram',enabled:true},{provider_kind:'llm',provider_slug:llm,enabled:true},{provider_kind:'tts',provider_slug:'deepgram',enabled:true}];
+ return {from(table){
+  if(table==='ai_call_campaigns')return {select(){return {eq(){return {single:async()=>({data:campaign,error:null})}}}}};
+  if(table==='ai_provider_configs')return {select(){return {eq:async()=>({data:configs,error:null})}}};
+  throw new Error(`unexpected table ${table}`);
+ }};
+}
 const adminAuth=async()=>({admin:preflightAdmin(),user:{id:'admin'}});
 const placeBody={action:'place',confirmation:'PLACE ONE REAL TWILIO CALL',campaignId:'11111111-1111-4111-8111-111111111111',destination:'+32470000001',requestKey:'phase7_preflight_request_0001'};
 
