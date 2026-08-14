@@ -2,9 +2,10 @@ import WebSocket from 'ws';
 
 function timeoutMs(settings,key,fallback){const n=Number(settings?.[key]);return Number.isFinite(n)&&n>=100&&n<=60000?n:fallback}
 function safeJson(data){try{return JSON.parse(String(data))}catch{return null}}
+function utteranceEndMs(settings){const n=Number(settings?.utterance_end_ms??1000);return Number.isFinite(n)&&n>=1000&&n<=5000?Math.round(n):1000}
 
 export function createDeepgramSTT({apiKey=process.env.DEEPGRAM_API_KEY,settings={},WebSocketImpl=WebSocket,now=()=>Date.now()}={}){
- const model=settings.model||'nova-3';const language=settings.language||'en';const endpointing=Number(settings.endpointing_ms||300);const utteranceEnd=Number(settings.utterance_end_ms||900);
+ const model=settings.model||'nova-3';const language=settings.language||'en';const endpointing=Number(settings.endpointing_ms||300);const utteranceEnd=utteranceEndMs(settings);
  let ws=null;let opened=false;let closed=false;let lastAudioAt=0;let handlers={};let openTimer=null;
  const url=new URL('wss://api.deepgram.com/v1/listen');
  for(const [k,v] of Object.entries({model,language,encoding:'mulaw',sample_rate:'8000',channels:'1',interim_results:'true',smart_format:'true',vad_events:'true',endpointing:String(endpointing),utterance_end_ms:String(utteranceEnd)}))url.searchParams.set(k,v);
