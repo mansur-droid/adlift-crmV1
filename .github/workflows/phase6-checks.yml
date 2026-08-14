@@ -1,7 +1,7 @@
 name: Phase 6 checks
 on:
   push:
-    branches: [phase6-twilio-telephony, phase7-realtime-voice-agent, main]
+    branches: [phase6-twilio-telephony, phase7-realtime-voice-agent, phase7-groq-llm, main]
   workflow_dispatch:
 
 jobs:
@@ -106,7 +106,7 @@ jobs:
           grep -q "stale_sequence" supabase/migrations/20260812040000_ai_voice_phase6_twilio.sql
           grep -q "terminal_regression_blocked" supabase/migrations/20260812040000_ai_voice_phase6_twilio.sql
           ! grep -R "Start AI Campaign" src
-          ! grep -R "TWILIO_AUTH_TOKEN\|DEEPGRAM_API_KEY\|OPENAI_API_KEY" src
+          ! grep -R "TWILIO_AUTH_TOKEN\|DEEPGRAM_API_KEY\|OPENAI_API_KEY\|GROQ_API_KEY" src
 
       - name: Confirm CI has no real provider credentials
         run: |
@@ -116,3 +116,4 @@ jobs:
           test -z "$TWILIO_FROM_NUMBER"
           test -z "$DEEPGRAM_API_KEY"
           test -z "$OPENAI_API_KEY"
+          test -z "$GROQ_API_KEY"
