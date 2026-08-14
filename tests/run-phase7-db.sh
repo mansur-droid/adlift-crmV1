@@ -30,7 +30,8 @@ for migration in \
  supabase/migrations/20260812020000_ai_voice_phase4_admin_fields.sql \
  supabase/migrations/20260812030000_ai_voice_phase5_eligibility.sql \
  supabase/migrations/20260812040000_ai_voice_phase6_twilio.sql \
- supabase/migrations/20260814010000_ai_voice_phase7_realtime.sql; do
+ supabase/migrations/20260814010000_ai_voice_phase7_realtime.sql \
+ supabase/migrations/20260814233000_phase7_controlled_test_diagnostics.sql; do
   "${PSQL[@]}" -f "$migration"
 done
 
