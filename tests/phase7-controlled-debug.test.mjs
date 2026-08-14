@@ -17,7 +17,15 @@ class MockSocket extends EventEmitter{
 function res(){return {statusCode:200,body:null,headers:{},setHeader(k,v){this.headers[k]=v},status(n){this.statusCode=n;return this},json(v){this.body=v;return this}}}
 function req(body={}){return {method:'POST',body,headers:{authorization:'Bearer test'}}}
 const readyProvider={status:()=>({configured:true,readyForTest:true,fromNumber:'+15005550006'}),createCall:async()=>{throw new Error('Twilio createCall must not be reached in this test')}};
-function withOpenAIPreflight(rpc){const campaign={id:'11111111-1111-4111-8111-111111111111',stt_provider_slug:'deepgram',llm_provider_slug:'openai',tts_provider_slug:'deepgram'};const configs=[{provider_kind:'stt',provider_slug:'deepgram',enabled:true},{provider_kind:'llm',provider_slug:'openai',enabled:true},{provider_kind:'tts',provider_slug:'deepgram',enabled:true}];return {rpc,from(table){if(table==='ai_call_campaigns')return {select(){return {eq(){return {single:async()=>({data:campaign,error:null})}}}}};if(table==='ai_provider_configs')return {select(){return {eq:async()=>({data:configs,error:null})}};throw new Error(`unexpected table ${table}`)}}}
+function withOpenAIPreflight(rpc){
+ const campaign={id:'11111111-1111-4111-8111-111111111111',stt_provider_slug:'deepgram',llm_provider_slug:'openai',tts_provider_slug:'deepgram'};
+ const configs=[{provider_kind:'stt',provider_slug:'deepgram',enabled:true},{provider_kind:'llm',provider_slug:'openai',enabled:true},{provider_kind:'tts',provider_slug:'deepgram',enabled:true}];
+ return {rpc,from(table){
+  if(table==='ai_call_campaigns')return {select(){return {eq(){return {single:async()=>({data:campaign,error:null})}}}}};
+  if(table==='ai_provider_configs')return {select(){return {eq:async()=>({data:configs,error:null})}}};
+  throw new Error(`unexpected table ${table}`);
+ }};
+}
 
 test('STT buffers Twilio audio during startup then forwards it on Deepgram open',async()=>{
  MockSocket.instances=[];const stt=createDeepgramSTT({apiKey:'configured',WebSocketImpl:MockSocket,setIntervalFn:()=>1,clearIntervalFn:()=>{}});const connecting=stt.connect();const socket=MockSocket.instances[0];
