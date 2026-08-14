@@ -8,7 +8,13 @@ function sse(parts){const enc=new TextEncoder();let i=0;return new ReadableStrea
 function groqStream(...deltas){return sse([...deltas.map(delta=>`data: ${JSON.stringify({choices:[{delta:{content:delta}}]})}\n\n`),'data: [DONE]\n\n'])}
 function collect(llm,args={}){return (async()=>{const out=[];for await(const item of llm.streamResponse({system:'rules',history:[],user:'hello',signal:new AbortController().signal,...args}))out.push(item);return out})()}
 
-function preflightAdmin(campaign,configs=[]){return {from(table){if(table==='ai_call_campaigns')return {select(){return {eq(){return {single:async()=>({data:campaign,error:null})}}}}};if(table==='ai_provider_configs')return {select(){return {eq:async()=>({data:configs,error:null})}};throw new Error(`unexpected table ${table}`)}}}
+function preflightAdmin(campaign,configs=[]){
+ return {from(table){
+  if(table==='ai_call_campaigns')return {select(){return {eq(){return {single:async()=>({data:campaign,error:null})}}}}};
+  if(table==='ai_provider_configs')return {select(){return {eq:async()=>({data:configs,error:null})}}};
+  throw new Error(`unexpected table ${table}`);
+ }};
+}
 function response(){return {statusCode:200,body:null,headers:{},setHeader(k,v){this.headers[k]=v},status(n){this.statusCode=n;return this},json(v){this.body=v;return this}}}
 function request(body={}){return {method:'POST',body,headers:{authorization:'Bearer test'}}}
 const readyTwilio={status:()=>({configured:true,readyForTest:true,fromNumber:'+15005550006'}),createCall:async()=>{throw new Error('Twilio must not be called in preflight tests')}};
