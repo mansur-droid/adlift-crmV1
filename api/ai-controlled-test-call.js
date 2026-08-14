@@ -1,11 +1,28 @@
 import crypto from 'node:crypto';
 import {getTelephonyProvider} from './_telephony/index.js';
 import {requireAdmin,json,e164,phase6LiveEnabled,uuid} from './_telephony/server.js';
-import {voiceProviderStatus} from './_voice/providers/index.js';
+import {supportedVoiceProviders,voiceProviderStatus} from './_voice/providers/index.js';
 
 function mediaToken(attemptId,requestKey){return crypto.createHmac('sha256',String(process.env.TWILIO_AUTH_TOKEN||'phase7-disabled')).update(`${attemptId}:${requestKey}`).digest('hex')}
 function tokenHash(token){return crypto.createHash('sha256').update(token).digest('hex')}
 function reservationReason(reservation){return reservation?.reason==='phase5_ineligible'?(reservation?.eligibility?.reason_code||'phase5_ineligible'):(reservation?.reason||'reservation_rejected')}
+
+export async function preflightSelectedVoiceProviders(admin,campaignId,voiceProviders){
+ const {data:campaign,error:campaignError}=await admin.from('ai_call_campaigns').select('id,stt_provider_slug,llm_provider_slug,tts_provider_slug').eq('id',campaignId).single();
+ if(campaignError||!campaign)return {ok:false,reason:'campaign_voice_config_unavailable',message:'Campaign voice configuration could not be loaded.'};
+ const selected={stt:String(campaign.stt_provider_slug||''),llm:String(campaign.llm_provider_slug||''),tts:String(campaign.tts_provider_slug||'')};
+ const {data:configs,error:configError}=await admin.from('ai_provider_configs').select('provider_kind,provider_slug,enabled').eq('enabled',true);
+ if(configError)return {ok:false,reason:'voice_provider_config_unavailable',message:'Enabled voice provider configuration could not be loaded.',selected};
+ const enabled=new Set((configs||[]).filter(x=>x.enabled).map(x=>`${x.provider_kind}:${x.provider_slug}`));
+ for(const kind of ['stt','llm','tts']){
+  const slug=selected[kind];
+  if(!slug)return {ok:false,reason:`${kind}_provider_missing`,message:`Campaign ${kind.toUpperCase()} provider is not selected.`,selected};
+  if(!supportedVoiceProviders[kind]?.includes(slug))return {ok:false,reason:`${kind}_provider_unsupported`,message:`Selected ${kind.toUpperCase()} provider is not supported by this Phase 7 deployment.`,selected};
+  if(!enabled.has(`${kind}:${slug}`))return {ok:false,reason:`${kind}_provider_not_enabled`,message:`Selected ${kind.toUpperCase()} provider is not enabled in AI Calling provider configuration.`,selected};
+  if(!voiceProviders?.[slug]?.configured)return {ok:false,reason:`${kind}_provider_secret_missing`,message:`Selected ${kind.toUpperCase()} provider is missing its required server-side credential.`,selected};
+ }
+ return {ok:true,selected};
+}
 
 export function createControlledTestHandler({providerFactory=()=>getTelephonyProvider('twilio'),requireAdminFn=requireAdmin,liveEnabledFn=phase6LiveEnabled,now=()=>new Date(),randomUUID=()=>crypto.randomUUID(),voiceStatusFn=voiceProviderStatus}={}){
  return async function handler(req,res){
@@ -32,7 +49,7 @@ export function createControlledTestHandler({providerFactory=()=>getTelephonyPro
    if(!uuid(b.campaignId))return json(res,400,{error:'A valid Twilio campaignId is required.'});
    const to=e164(b.destination);if(!to)return json(res,400,{error:'Destination must be unambiguous international E.164, for example +32…'});
    const status=provider.status();if(!status.readyForTest)return json(res,503,{error:'Twilio conversational calling is not configured.',configurationError:status.configurationError||null});
-   if(!voiceProviders.deepgram?.configured||!voiceProviders.openai?.configured)return json(res,503,{error:'Conversational AI providers are not configured. No Twilio request was made.',voiceProviders});
+   const voicePreflight=await preflightSelectedVoiceProviders(admin,b.campaignId,voiceProviders);if(!voicePreflight.ok)return json(res,503,{error:'Conversational AI providers are not configured. No Twilio request was made.',reason:voicePreflight.reason,providerError:voicePreflight.message,selectedProviders:voicePreflight.selected||null,voiceProviders});
    const requestKey=String(b.requestKey||'');if(!/^[A-Za-z0-9_-]{16,100}$/.test(requestKey))return json(res,400,{error:'A stable requestKey is required.'});
 
    const {data:reservation,error:reserveError}=await admin.rpc('ai_reserve_controlled_test_attempt',{p_campaign_id:b.campaignId,p_phone_e164:to,p_request_key:requestKey,p_rate_limit_seconds:60});
@@ -57,8 +74,8 @@ export function createControlledTestHandler({providerFactory=()=>getTelephonyPro
     const {error:persistError}=await admin.from('ai_call_attempts').update({provider_call_id:call.sid,provider_status:call.status||'queued',provider_metadata:{...(initiating.provider_metadata||{}),phase:'7',controlled_test:true,realtime_voice:true}}).eq('id',attemptId).eq('lock_token',claim.lock_token);
     await admin.from('ai_voice_sessions').update({provider_call_id:call.sid,status:'connecting'}).eq('attempt_id',attemptId);
     if(persistError){await admin.from('ai_call_attempts').update({provider_call_id:call.sid,provider_status:call.status||'queued',failure_code:'PROVIDER_ID_PERSIST_RETRY',failure_reason:'Twilio accepted the call; provider ID persistence required recovery.'}).eq('id',attemptId);}
-    await admin.from('ai_call_events').insert({attempt_id:attemptId,event_type:'telephony.originated',event_source:'system',provider_slug:'twilio',provider_event_id:`origin:${call.sid}`,payload:{callSid:call.sid,status:call.status||'queued',phase:7,realtimeVoice:true}});
-    return json(res,201,{attemptId,callSid:call.sid,state:'initiating',providerStatus:call.status||'queued',voiceSessionId:voiceReservation.session_id,duplicateRequest:false});
+    await admin.from('ai_call_events').insert({attempt_id:attemptId,event_type:'telephony.originated',event_source:'system',provider_slug:'twilio',provider_event_id:`origin:${call.sid}`,payload:{callSid:call.sid,status:call.status||'queued',phase:7,realtimeVoice:true,llmProvider:voicePreflight.selected.llm}});
+    return json(res,201,{attemptId,callSid:call.sid,state:'initiating',providerStatus:call.status||'queued',voiceSessionId:voiceReservation.session_id,selectedProviders:voicePreflight.selected,duplicateRequest:false});
    }catch(e){
     const safe=e.safe||{kind:'provider_error',internalStatus:'provider_rejected',code:'TWILIO_ERROR',message:'Twilio origination failed.'};const ended=now().toISOString();
     await admin.from('ai_call_attempts').update({status:safe.internalStatus||'provider_rejected',failure_code:safe.code||safe.kind,failure_reason:safe.message||safe.kind,ended_at:ended,completed_at:ended,duration_seconds:0,connected_seconds:0,lock_token:null,locked_by:null,locked_at:null,lock_expires_at:null}).eq('id',attemptId);
