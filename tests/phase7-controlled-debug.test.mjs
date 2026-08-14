@@ -17,6 +17,7 @@ class MockSocket extends EventEmitter{
 function res(){return {statusCode:200,body:null,headers:{},setHeader(k,v){this.headers[k]=v},status(n){this.statusCode=n;return this},json(v){this.body=v;return this}}}
 function req(body={}){return {method:'POST',body,headers:{authorization:'Bearer test'}}}
 const readyProvider={status:()=>({configured:true,readyForTest:true,fromNumber:'+15005550006'}),createCall:async()=>{throw new Error('Twilio createCall must not be reached in this test')}};
+function withOpenAIPreflight(rpc){const campaign={id:'11111111-1111-4111-8111-111111111111',stt_provider_slug:'deepgram',llm_provider_slug:'openai',tts_provider_slug:'deepgram'};const configs=[{provider_kind:'stt',provider_slug:'deepgram',enabled:true},{provider_kind:'llm',provider_slug:'openai',enabled:true},{provider_kind:'tts',provider_slug:'deepgram',enabled:true}];return {rpc,from(table){if(table==='ai_call_campaigns')return {select(){return {eq(){return {single:async()=>({data:campaign,error:null})}}}}};if(table==='ai_provider_configs')return {select(){return {eq:async()=>({data:configs,error:null})}};throw new Error(`unexpected table ${table}`)}}}
 
 test('STT buffers Twilio audio during startup then forwards it on Deepgram open',async()=>{
  MockSocket.instances=[];const stt=createDeepgramSTT({apiKey:'configured',WebSocketImpl:MockSocket,setIntervalFn:()=>1,clearIntervalFn:()=>{}});const connecting=stt.connect();const socket=MockSocket.instances[0];
@@ -38,7 +39,7 @@ test('OpenAI provider 400 preserves the sanitized provider reason',async()=>{
 });
 
 test('controlled test API propagates the concrete Phase 5 reason instead of phase5_ineligible',async()=>{
- const admin={rpc:async name=>name==='ai_reserve_controlled_test_attempt'?{data:{reserved:false,reason:'phase5_ineligible',eligibility:{eligible:false,reason_code:'outside_calling_window',lead_timezone:'America/New_York'}},error:null}:{data:null,error:null}};
+ const admin=withOpenAIPreflight(async name=>name==='ai_reserve_controlled_test_attempt'?{data:{reserved:false,reason:'phase5_ineligible',eligibility:{eligible:false,reason_code:'outside_calling_window',lead_timezone:'America/New_York'}},error:null}:{data:null,error:null});
  const handler=createControlledTestHandler({providerFactory:()=>readyProvider,requireAdminFn:async()=>({admin,user:{id:'admin'}}),liveEnabledFn:()=>true,voiceStatusFn:()=>({deepgram:{configured:true},openai:{configured:true}})});const r=res();await handler(req({action:'place',confirmation:'PLACE ONE REAL TWILIO CALL',campaignId:'11111111-1111-4111-8111-111111111111',destination:'+12295373671',requestKey:'controlled_debug_key_0001'}),r);assert.equal(r.statusCode,409);assert.equal(r.body.reason,'outside_calling_window');assert.equal(r.body.reasonSource,'phase5_ineligible');
 });
 
