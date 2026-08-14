@@ -2,7 +2,7 @@ name: Phase 7 controlled debug
 on:
   workflow_dispatch:
   push:
-    branches: [phase7-controlled-test-debug, main]
+    branches: [phase7-controlled-test-debug, phase7-groq-llm, main]
 
 jobs:
   verify:
@@ -66,7 +66,7 @@ jobs:
           grep -q "ai_reserve_voice_session" api/ai-controlled-test-call.js
           grep -q "ai_controlled_test_diagnostics" api/ai-controlled-test-call.js
           ! grep -R "Start AI Campaign" src
-          ! grep -R "TWILIO_AUTH_TOKEN\|DEEPGRAM_API_KEY\|OPENAI_API_KEY" src
+          ! grep -R "TWILIO_AUTH_TOKEN\|DEEPGRAM_API_KEY\|OPENAI_API_KEY\|GROQ_API_KEY" src
       - name: Confirm no live provider credentials in CI
         run: |
           test "$TWILIO_CONTROLLED_TEST_ENABLED" = "false"
@@ -75,3 +75,4 @@ jobs:
           test -z "$TWILIO_FROM_NUMBER"
           test -z "$DEEPGRAM_API_KEY"
           test -z "$OPENAI_API_KEY"
+          test -z "$GROQ_API_KEY"
