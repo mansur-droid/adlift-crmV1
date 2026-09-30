@@ -3,3 +3,7 @@ body:has(aside > button.active:nth-of-type(6)) main .card .empty{font-size:0!imp
 body:has(aside > button.active:nth-of-type(6)) main .card .empty:after{content:'No Google Form submissions yet. Submit the connected Google Form once, then refresh this page.';font-size:16px!important}
 body:has(aside > button.active:nth-of-type(6)) main .card .sectionTop p{font-size:0!important}
 body:has(aside > button.active:nth-of-type(6)) main .card .sectionTop p:after{content:'Google Form submissions';font-size:16px!important}
+body:has(aside > button.active:nth-of-type(6)) #delete-all-audit-submissions[hidden]{display:none!important}
+#website-audit-submissions .audit-actions-column{position:sticky;right:0;background:#11182b;min-width:88px;box-shadow:-8px 0 16px #0003}
+#website-audit-submissions .audit-actions-column .actions button{display:inline-flex;align-items:center;justify-content:center}
+body.light-theme #website-audit-submissions .audit-actions-column{background:#fff;box-shadow:-8px 0 16px #0f172a12}
