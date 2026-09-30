@@ -23,11 +23,21 @@ const columns = [
 let cache = [];
 let loading = false;
 let lastFetch = 0;
+let deleting = false;
+
+async function isAdmin() {
+  const { data: { user } } = await supabase.auth.getUser();
+  return user?.app_metadata?.role === 'admin';
+}
 
 function isSubmissionsActive() {
   return [...document.querySelectorAll('aside button.active')].some(
     (button) => button.textContent && button.textContent.trim().includes('Submissions'),
   );
+}
+
+function isAdminView() {
+  return document.querySelector('aside .roleBadge')?.textContent?.trim().toLowerCase() === 'admin';
 }
 
 function formatValue(row, key) {
@@ -54,7 +64,7 @@ async function fetchAuditSubmissions(force = false) {
   loading = true;
   const { data, error } = await supabase
     .from('audit_requests')
-    .select('created_at,first_name,email,phone,brokerage,city,state,average_home_price,target_buyer_type,target_price_range,target_areas,current_acquisition_methods,current_monthly_buyer_volume,currently_running_ads,monthly_ad_budget,marketing_consent,status')
+    .select('id,created_at,first_name,email,phone,brokerage,city,state,average_home_price,target_buyer_type,target_price_range,target_areas,current_acquisition_methods,current_monthly_buyer_volume,currently_running_ads,monthly_ad_budget,marketing_consent,status')
     .order('created_at', { ascending: false });
   loading = false;
   lastFetch = Date.now();
@@ -86,12 +96,55 @@ function renderError(message) {
   card.appendChild(box);
 }
 
+function showDeleteError(message) {
+  const card = getSubmissionCard();
+  if (!card) return;
+  let box = card.querySelector('#submission-delete-error');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'submission-delete-error';
+    box.className = 'dataError';
+    card.querySelector('.search')?.before(box);
+  }
+  box.textContent = message;
+}
+
+async function deleteSubmissions(ids) {
+  if (deleting || !ids.length || !(await isAdmin())) return;
+  deleting = true;
+  try {
+    for (let i = 0; i < ids.length; i += 100) {
+      const batch = ids.slice(i, i + 100);
+      const { data, error } = await supabase.from('audit_requests').delete().in('id', batch).select('id');
+      if (error) throw error;
+      if (data?.length !== batch.length) throw new Error('Some submissions could not be deleted.');
+    }
+    getSubmissionCard()?.querySelector('#submission-delete-error')?.remove();
+  } catch (error) {
+    showDeleteError(`Could not delete submissions: ${error.message}`);
+  } finally {
+    deleting = false;
+    await fetchAuditSubmissions(true);
+  }
+}
+
 function renderAuditSubmissions() {
   const card = getSubmissionCard();
   if (!card) return;
 
   const actions = card.querySelector('.sectionActions');
   if (actions) actions.style.display = 'none';
+  let deleteAll = card.querySelector('#delete-all-audit-submissions');
+  if (!deleteAll) {
+    deleteAll = document.createElement('button');
+    deleteAll.id = 'delete-all-audit-submissions';
+    deleteAll.type = 'button';
+    deleteAll.className = 'danger';
+    deleteAll.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6m5 4v6m4-6v6"/></svg> Delete all';
+    card.querySelector('.sectionTop')?.appendChild(deleteAll);
+  }
+  deleteAll.hidden = !cache.length || !isAdminView();
+  deleteAll.disabled = deleting;
 
   const subtitle = card.querySelector('.sectionTop p');
   if (subtitle) subtitle.textContent = `${cache.length} website audit submission${cache.length === 1 ? '' : 's'}`;
@@ -124,10 +177,25 @@ function renderAuditSubmissions() {
   container.className = 'tableWrap';
   container.innerHTML = `
     <table>
-      <thead><tr>${columns.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join('')}</tr></thead>
-      <tbody>${rows.map((row) => `<tr>${columns.map(([key]) => `<td>${escapeHtml(formatValue(row, key))}</td>`).join('')}</tr>`).join('')}</tbody>
+      <thead><tr>${columns.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join('')}${isAdminView() ? '<th class="audit-actions-column">Actions</th>' : ''}</tr></thead>
+      <tbody>${rows.map((row) => `<tr>${columns.map(([key]) => `<td>${escapeHtml(formatValue(row, key))}</td>`).join('')}${isAdminView() ? `<td class="audit-actions-column"><div class="actions"><button type="button" class="delete-audit-submission" data-id="${escapeHtml(row.id)}" aria-label="Delete submission from ${escapeHtml(row.first_name || row.email || 'unknown')}" title="Delete submission"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6m5 4v6m4-6v6"/></svg></button></div></td>` : ''}</tr>`).join('')}</tbody>
     </table>`;
 }
+
+document.addEventListener('click', async (event) => {
+  const rowButton = event.target.closest('.delete-audit-submission');
+  const allButton = event.target.closest('#delete-all-audit-submissions');
+  if (!rowButton && !allButton) return;
+  if (!(await isAdmin())) return;
+  if (rowButton) {
+    const row = cache.find((item) => item.id === rowButton.dataset.id);
+    if (row && window.confirm(`Delete the submission from ${row.first_name || row.email || 'this person'}? This cannot be undone.`)) {
+      await deleteSubmissions([row.id]);
+    }
+  } else if (cache.length && window.confirm(`Delete all ${cache.length} website audit submissions? This cannot be undone.`)) {
+    await deleteSubmissions(cache.map((row) => row.id));
+  }
+});
 
 function update() {
   if (!isSubmissionsActive()) return;
