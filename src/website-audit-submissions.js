@@ -26,8 +26,8 @@ let lastFetch = 0;
 let deleting = false;
 
 async function isAdmin() {
-  const { data: { user } } = await supabase.auth.getUser();
-  return user?.app_metadata?.role === 'admin';
+  const { data: { session }, error } = await supabase.auth.refreshSession();
+  return !error && session?.user?.app_metadata?.role === 'admin';
 }
 
 function isSubmissionsActive() {
@@ -186,7 +186,6 @@ document.addEventListener('click', async (event) => {
   const rowButton = event.target.closest('.delete-audit-submission');
   const allButton = event.target.closest('#delete-all-audit-submissions');
   if (!rowButton && !allButton) return;
-  if (!(await isAdmin())) return;
   if (rowButton) {
     const row = cache.find((item) => item.id === rowButton.dataset.id);
     if (row && window.confirm(`Delete the submission from ${row.first_name || row.email || 'this person'}? This cannot be undone.`)) {
